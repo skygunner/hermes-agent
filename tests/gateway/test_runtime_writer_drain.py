@@ -75,6 +75,9 @@ if claimed:
         assert contender() == 'CLAIMED False', 'final cleanup unlocked while a runtime writer survived'
     finally:
         gate.set()
+        # Boot now starts a process-lifetime browser janitor (#145010); it is not a lock-holding writer.
+        from tools.browser_session_lifecycle import stop_cleanup_thread
+        stop_cleanup_thread()
         for thread in threads:
             thread.join(5)
             assert not thread.is_alive()
