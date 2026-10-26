@@ -7,7 +7,7 @@ export const canonicalEn = {
   canonical: {
     // app/slash/canonicalSessionControls.ts + canonicalSessionCommands.ts
     controls: {
-      modelUsage: 'usage: /model <model> [--provider <provider>] [--session]',
+      modelUsage: 'usage: /model <model> [--provider <provider>] [--session | --global]',
       unsupportedModelOption: (flag: string) => `unsupported canonical model option: ${flag}`,
       identityUnavailable: 'session execution identity unavailable; reconnect before editing',
       compressedStale: 'compressed transcript is stale; reopen the session',
