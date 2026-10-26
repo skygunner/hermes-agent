@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 
 from hermes_constants import display_hermes_home
-from utils import atomic_json_write
+from utils import atomic_json_write, env_var_enabled
 from hermes_cli.config import cfg_get
 
 
@@ -117,7 +117,8 @@ def _get_webhook_config() -> dict:
 
 
 def _is_webhook_enabled() -> bool:
-    return bool(_get_webhook_config().get("enabled"))
+    # The gateway also enables webhook from WEBHOOK_ENABLED alone (gateway/config_env.py).
+    return bool(_get_webhook_config().get("enabled")) or env_var_enabled("WEBHOOK_ENABLED")
 
 
 def _get_webhook_base_url() -> str:

@@ -1,4 +1,7 @@
-"""Tests for hermes_cli/webhook.py — webhook subscription CLI."""
+"""Tests for hermes_cli/webhook.py — webhook subscription CLI.
+
+Regression for #40324: the CLI gate must honour WEBHOOK_ENABLED, as the gateway does.
+"""
 
 import json
 import os
@@ -10,6 +13,7 @@ from argparse import Namespace
 from hermes_cli.webhook import (
     webhook_command,
     _get_webhook_base_url,
+    _is_webhook_enabled as _real_is_webhook_enabled,
     _load_subscriptions,
     _mutate_subscriptions,
     _subscriptions_path,
@@ -279,3 +283,23 @@ class TestWebhookEnabledGate:
         webhook_command(_make_args(webhook_action="list"))
         out = capsys.readouterr().out
         assert "not enabled" in out.lower()
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", " on "])
+    def test_env_value_enables_the_gate_without_config_yaml(self, value, capsys, monkeypatch):
+        monkeypatch.setattr("hermes_cli.webhook._is_webhook_enabled", _real_is_webhook_enabled)
+        monkeypatch.setenv("WEBHOOK_ENABLED", value)
+
+        assert webhook_command(_make_args(webhook_action="list")) is None
+
+        out = capsys.readouterr().out
+        assert "not enabled" not in out.lower()
+        assert "No dynamic webhook subscriptions." in out
+
+    @pytest.mark.parametrize("value", ["false", "0", ""])
+    def test_falsy_env_value_keeps_the_gate_closed(self, value, capsys, monkeypatch):
+        monkeypatch.setattr("hermes_cli.webhook._is_webhook_enabled", _real_is_webhook_enabled)
+        monkeypatch.setenv("WEBHOOK_ENABLED", value)
+
+        assert webhook_command(_make_args(webhook_action="list")) == 1
+
+        assert "not enabled" in capsys.readouterr().out.lower()
