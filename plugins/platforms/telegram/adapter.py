@@ -7229,9 +7229,8 @@ def _resolve_notifications_mode() -> str:
     mode = os.getenv("HERMES_TELEGRAM_NOTIFICATIONS", "")
     if not mode:
         try:
-            from gateway.config import load_gateway_config
-            from gateway.run import cfg_get
-            _raw = cfg_get(load_gateway_config(), "display", "platforms", "telegram", "notifications")
+            from gateway.run import _load_gateway_config, cfg_get
+            _raw = cfg_get(_load_gateway_config(), "display", "platforms", "telegram", "notifications")
             if _raw not in {None, ""}:
                 mode = str(_raw).strip().lower()
         except Exception:

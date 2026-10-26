@@ -41,3 +41,24 @@ def test_clarify_text_fallback_pushes_in_important_mode():
         adapter, chat_id="123", question="Which env?", choices=None, clarify_id="c1", session_key="s", metadata=None))
 
     assert adapter._bot.send_message.await_args.kwargs.get("disable_notification") is None
+
+
+def test_notifications_mode_reads_the_gateway_raw_config(monkeypatch):
+    """`display.platforms.telegram.notifications` is honoured (#144895): the gateway hands its raw
+    config dict to `cfg_get`, so reading it through the dataclass loader always yielded None."""
+    from gateway import run
+    from plugins.platforms.telegram.adapter import _resolve_notifications_mode
+
+    monkeypatch.delenv("HERMES_TELEGRAM_NOTIFICATIONS", raising=False)
+    monkeypatch.setattr(run, "_load_gateway_config",
+                        lambda: {"display": {"platforms": {"telegram": {"notifications": "all"}}}})
+    assert _resolve_notifications_mode() == "all"
+
+
+def test_notifications_mode_defaults_when_config_has_no_key(monkeypatch):
+    from gateway import run
+    from plugins.platforms.telegram.adapter import _resolve_notifications_mode
+
+    monkeypatch.delenv("HERMES_TELEGRAM_NOTIFICATIONS", raising=False)
+    monkeypatch.setattr(run, "_load_gateway_config", lambda: {"display": {}})
+    assert _resolve_notifications_mode() == "important"
