@@ -31,6 +31,12 @@ EXCLUDED_SKILL_DIRS = frozenset((
 # via skill_view(skill, file_path=...), never scanned as standalone skills.
 SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 
+def is_excluded_skill_dir(name: str) -> bool:
+    """True if a skill scan must skip this directory: the bookkeeping/dependency names above
+    plus any hidden directory, since editors and agent frameworks (.cursor, .opencode, ...)
+    vendor their own skill copies inside a workspace that is not an installed skill source."""
+    return name in EXCLUDED_SKILL_DIRS or name.startswith(".")
+
 def is_excluded_skill_path(path, *, root: Optional[Path] = None) -> bool:
     """True if *path* should be skipped by skill scanners (VCS/dependency/cache
     dirs + support packages). Apply to every SKILL.md from a direct ``rglob``."""
@@ -872,12 +878,12 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
 
 
 def iter_skill_index_files(skills_dir: Path, filename: str):
-    """Walk skills_dir yielding sorted paths matching *filename*; prunes
-    EXCLUDED_SKILL_DIRS and support dirs of skill roots."""
+    """Walk skills_dir yielding sorted paths matching *filename*; prunes hidden and
+    EXCLUDED_SKILL_DIRS dirs and support dirs of skill roots."""
     matches: list[str] = []
     for root, dirs, files in os.walk(str(skills_dir), followlinks=True):
         has_skill_md = "SKILL.md" in files
-        dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
+        dirs[:] = [d for d in dirs if not is_excluded_skill_dir(d) and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
         if filename in files:
             matches.append(os.path.join(root, filename))
     yield from map(Path, sorted(matches))

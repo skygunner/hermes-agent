@@ -51,7 +51,7 @@ def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH) -> None:
     (``iter_skill_index_files``: no excluded dirs, no support dirs of a skill), depth-bounded. The child
     names, not only mtimes: an install and an uninstall inside one coarse mtime tick (1-2 s on some
     filesystems) leave every mtime equal, and the change must still show. ~1 ms for 170 dirs."""
-    from agent.skill_utils import EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS
+    from agent.skill_utils import SKILL_SUPPORT_DIRS, is_excluded_skill_dir
     try:
         mtime = os.stat(root).st_mtime_ns
         with os.scandir(root) as it:
@@ -70,7 +70,7 @@ def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH) -> None:
     if depth <= 0:
         return
     for name in names:
-        if name not in EXCLUDED_SKILL_DIRS and not (is_skill and name in SKILL_SUPPORT_DIRS):
+        if not is_excluded_skill_dir(name) and not (is_skill and name in SKILL_SUPPORT_DIRS):
             _dir_tree_signature(os.path.join(root, name), sig, depth - 1)
 
 

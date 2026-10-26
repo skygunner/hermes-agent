@@ -1,4 +1,6 @@
-"""Tests for agent/skill_utils.py."""
+"""Tests for agent/skill_utils.py.
+
+Regression coverage for #26451: hidden editor/agent workspaces are not skill sources."""
 
 
 import pytest
@@ -337,6 +339,22 @@ def test_iter_skill_index_files_prunes_skill_support_dirs(tmp_path):
     assert desc_found == []
     assert is_skill_support_path(package / "SKILL.md") is True
     assert is_excluded_skill_path(package / "SKILL.md") is True
+
+
+def test_iter_skill_index_files_skips_hidden_workspace_dirs(tmp_path):
+    """Skill copies vendored inside hidden editor/agent workspaces are not installed skills."""
+    visible = tmp_path / "real-skill"
+    visible.mkdir()
+    (visible / "SKILL.md").write_text("---\nname: real-skill\n---\n", encoding="utf-8")
+
+    for hidden in (tmp_path / ".cursor" / "skills" / "cursor-copy",
+                   tmp_path / "category" / ".opencode" / "opencode-copy"):
+        hidden.mkdir(parents=True)
+        (hidden / "SKILL.md").write_text(f"---\nname: {hidden.name}\n---\n", encoding="utf-8")
+        (hidden / "DESCRIPTION.md").write_text("---\ndescription: vendored\n---\n", encoding="utf-8")
+
+    assert list(iter_skill_index_files(tmp_path, "SKILL.md")) == [visible / "SKILL.md"]
+    assert list(iter_skill_index_files(tmp_path, "DESCRIPTION.md")) == []
 
 
 def test_iter_skill_index_files_keeps_support_named_categories(tmp_path):
