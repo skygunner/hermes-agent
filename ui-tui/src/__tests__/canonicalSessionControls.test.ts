@@ -58,6 +58,7 @@ it('canonical model, branch and compression use generation-fenced owner mutation
 
   for (const [command, operation, payload] of [
     ['/model picked --provider custom --tui-session', 'model', { model: 'picked', provider: 'custom' }],
+    ['/model picked --global', 'model', { model: 'picked', scope: 'global' }],
     ['/branch Child name', 'branch', { title: 'Child name' }],
     ['/compress keep context', 'compress', { focus: 'keep context' }]
   ] as const) {
@@ -102,7 +103,7 @@ it('ambiguous mutations retry the frozen identity while unsupported model scopes
   const calls = request.mock.calls.filter(([method]) => method === 'session.mutate')
   expect(calls).toHaveLength(2)
   expect(calls[0]![1]).toEqual(calls[1]![1])
-  slash('/model picked --global')
+  slash('/model picked --once')
   await flush()
   expect(request.mock.calls.filter(([method]) => method === 'session.mutate')).toHaveLength(2)
 })

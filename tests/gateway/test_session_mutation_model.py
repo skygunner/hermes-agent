@@ -740,3 +740,56 @@ async def test_large_context_guard_reads_the_persisted_anchor_with_no_resident_a
     finally:
         await owner.close()
         store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
+async def test_a_global_model_pick_also_writes_the_profile_default(tmp_path, monkeypatch):
+    """#145100: the picker's ``--global`` (``scope: global``) must reach ``config.yaml``, not only the
+    session's frozen policy; a session pick leaves the profile's default untouched."""
+    from types import SimpleNamespace
+    from gateway import run
+    from gateway.config import GatewayConfig
+    from gateway.session import SessionStore
+    from gateway.session_authority import SessionAuthority
+    from gateway.session_controls import AuthorityConnection
+    from gateway.session_local import create_local_session
+    from hermes_cli import model_selection_guards, model_switch
+    import hermes_state_runtime as rt
+    import hermes_yaml as yaml
+    monkeypatch.setattr(run, '_load_gateway_config', lambda *a: {})
+    monkeypatch.setattr(model_selection_guards, '_context_cache_threshold', lambda: 1000)
+    monkeypatch.setattr(model_switch, 'switch_model', lambda **k: model_switch.ModelSwitchResult(
+        success=True, new_model=k['raw_input'], target_provider='custom', base_url='http://127.0.0.1:9/v1'))
+    store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+    db = store._db
+    profile_config = Path(db.db_path).resolve().parent / 'config.yaml'
+    runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False,
+                             _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None,
+                             _resolve_session_agent_runtime=lambda **k: ('frozen', {}))
+    runner._adapter_for_source = lambda source: runner.adapters.get(source.platform)
+    authority = SessionAuthority(runner, profile_id=str(profile_config.parent), instance_id='owner', db=db,
+                                 epoch=rt.begin_runtime_epoch(db, instance_id='owner'))
+    owner = AuthorityConnection(authority, object(), {'user_id': 'human'})
+    ref = create_local_session(authority, owner.actor, dict(request_id='m', source='cli', cwd=str(tmp_path),
+                                                            model='frozen', toolsets=[]))
+    calls = iter(range(100))
+
+    async def pick(payload):
+        snap = db.get_session(ref.session_id)
+        response = await owner.dispatch({'id': 1, 'method': 'session.mutate', 'params': {
+            'session_id': ref.session_id, 'request_id': f'switch-{next(calls)}', 'operation': 'model',
+            'payload': payload, 'expected_revision': snap['runtime_revision'],
+            'expected_generation': snap['runtime_generation']}})
+        assert 'result' in response, response
+        return response['result']
+    try:
+        assert (await pick({'model': 'session-only'}))['model'] == 'session-only'
+        assert not profile_config.exists(), 'a session pick must not touch the profile default'
+        applied = await pick({'model': 'default-model', 'scope': 'global'})
+        assert applied['model'] == 'default-model'
+        saved = yaml.safe_load(profile_config.read_text(encoding='utf-8'))['model']
+        assert saved['default'] == 'default-model' and saved['provider'] == 'custom'
+        assert saved['base_url'] == 'http://127.0.0.1:9/v1'
+    finally:
+        await owner.close()
+        store.close_all_db_handles()

@@ -33,6 +33,14 @@ function modelPayload(arg: string) {
       continue
     }
 
+    // The picker's ^g "persist: global" (#145100): the owner commits the pick and writes it to the
+    // profile's config.yaml, so a later session starts on it.
+    if (flag === '--global') {
+      payload.scope = 'global'
+
+      continue
+    }
+
     if (flag === '--provider' && parts[0] && !parts[0].startsWith('--')) {
       payload.provider = parts.shift()!
 

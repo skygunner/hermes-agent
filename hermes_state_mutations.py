@@ -10,8 +10,12 @@ def validate_action(operation, payload):
         raise RuntimeStoreError('invalid_params')
     # ``confirm``: the owner's selection-guard token for this exact resolved target (session_mutation_model).
     # ``reasoning``: a level picked with the model, committed in the same selection.
-    if (operation == 'model' and 'model' in payload and not set(payload) - {'model', 'provider', 'confirm', 'reasoning'}
-            and all(isinstance(v, str) and v.strip() for v in payload.values())):
+    # ``scope``: ``global`` is ``--global`` (the picker's ^g toggle): the pick also becomes the profile's
+    # default. A session pick omits it, so a session receipt's identity is unchanged.
+    if (operation == 'model' and 'model' in payload
+            and not set(payload) - {'model', 'provider', 'confirm', 'reasoning', 'scope'}
+            and all(isinstance(v, str) and v.strip() for v in payload.values())
+            and payload.get('scope', 'session') in ('session', 'global')):
         from hermes_constants import parse_reasoning_effort
         if 'reasoning' not in payload or parse_reasoning_effort(payload['reasoning']) is not None:
             return

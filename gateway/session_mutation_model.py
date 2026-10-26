@@ -48,6 +48,9 @@ async def prepare_model(authority, live, payload, prepared):
     from hermes_cli.model_switch import apply_model_selection, switch_model
     from hermes_cli.config import get_compatible_custom_providers
     old = restore_policy(prepared['snapshot']['receipt']['policy'])
+    # ``scope: global`` is the picker's ``--global`` (^g): the same pick, also saved as the profile's
+    # default below. A session pick omits the key, so its receipt identity is unchanged.
+    global_pick = payload.get('scope') == 'global'
     config, current = _current_route(authority, live, old)
     # A pick is an explicit user action: it resolves against the owning profile's CURRENT named
     # providers, as CLI/TUI ``/model`` do (#139740). A following session's ``config`` already is
@@ -61,7 +64,7 @@ async def prepare_model(authority, live, payload, prepared):
     result, alias_credential = await asyncio.to_thread(switch, raw_input=payload['model'],
         current_provider=current.provider, current_model=current.model, current_base_url=current.base_url,
         current_api_key=current.api_key, explicit_provider=payload.get('provider', ''),
-        is_global=False, user_providers=resolution.get('providers'),
+        is_global=global_pick, user_providers=resolution.get('providers'),
         custom_providers=get_compatible_custom_providers(resolution))
     if not result.success:
         raise RuntimeStoreError('model_resolution_failed')
@@ -143,7 +146,19 @@ async def prepare_model(authority, live, payload, prepared):
         key = None
     policy = bind_launch_key(authority, prepared['snapshot']['receipt']['session_id'], policy, key,
                              config_secrets=secrets)
+    if global_pick:
+        # A ``--global`` pick's durable half is the profile's own config.yaml, which no other canonical
+        # write owns. Written here, after the selection guard and before the receipt, so an exact retry
+        # (which never re-prepares) writes it once and a lost fence converges on the next attempt.
+        await asyncio.to_thread(_persist_pick_as_default, authority, result)
     return dict(prepared, policy=asdict(policy))
+
+
+def _persist_pick_as_default(authority, result):
+    """Write the pick's selection to the owning profile's config.yaml (``model.default``/route)."""
+    from pathlib import Path
+    from hermes_cli.model_switch import persist_model_selection
+    persist_model_selection(result, Path(authority.db.db_path).resolve().parent / 'config.yaml')
 
 
 def _provider_resolution_config(authority, config, bypass=False):
