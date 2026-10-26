@@ -1137,8 +1137,13 @@ def _extract_responses_message_text(item: Any) -> str:
 
 
 def _extract_responses_reasoning_text(item: Any) -> str:
-    """Compact reasoning text from a Responses reasoning item (summary, else ``text``)."""
-    chunks = _text_chunks(getattr(item, "summary", None))
+    """Compact reasoning text from a Responses reasoning item (summary, else ``content``
+    ``reasoning_text`` parts, else ``text``). Gateways such as Z.AI glm-5.3 behind Bifrost
+    return the chain of thought only as ``content[{"type": "reasoning_text"}]`` with
+    ``summary``/``text`` null (#144569); reading only those dropped it silently."""
+    chunks = _text_chunks(getattr(item, "summary", None)) or _text_chunks(
+        getattr(item, "content", None), {"reasoning_text"}
+    )
     text = getattr(item, "text", None)
     return "\n".join(chunks).strip() if chunks else (text.strip() if isinstance(text, str) else "")
 

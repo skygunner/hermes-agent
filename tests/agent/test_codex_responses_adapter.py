@@ -397,6 +397,43 @@ def test_normalize_codex_response_treats_summary_only_reasoning_as_incomplete():
     assert assistant_message.codex_reasoning_items is None
 
 
+def test_normalize_codex_response_reads_reasoning_text_content_parts():
+    """Regression for #144569: a gateway that ships reasoning only as
+    ``content[{"type": "reasoning_text"}]`` (``summary`` and ``text`` null, live
+    shape from Z.AI glm-5.3 behind Bifrost) had the chain of thought dropped
+    while its reasoning tokens were still billed and persisted nowhere."""
+    response = SimpleNamespace(
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="reasoning",
+                id="rs_1",
+                role=None,
+                summary=None,
+                text=None,
+                content=[
+                    SimpleNamespace(type="reasoning_text", text="first thought"),
+                    SimpleNamespace(type="reasoning_text", text="second thought"),
+                ],
+            ),
+            SimpleNamespace(
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="42")],
+            ),
+        ],
+    )
+
+    assistant_message, finish_reason = _normalize_codex_response(
+        response, issuer_kind="custom_gateway"
+    )
+
+    assert finish_reason == "stop"
+    assert assistant_message.content == "42"
+    assert assistant_message.reasoning == "first thought\nsecond thought"
+
+
 # ---------------------------------------------------------------------------
 # Server-side built-in tool calls (xAI native web_search, code interpreter,
 # etc.) come back as discrete ``*_call`` output items that xAI's
