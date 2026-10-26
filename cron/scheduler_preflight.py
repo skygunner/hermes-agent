@@ -355,6 +355,8 @@ def _empty_requested_mcp_toolsets(job: dict, cfg: dict) -> Optional[str]:
     are registered per profile overlay, so under a multiplexer a job can name a server that is
     connected for another profile and build a tool-less agent that ``quiet_mode`` never reports.
     Only servers the job explicitly asked for count; the implicit enabled-server merge does not.
+    A job may name the server by its bare name or by the registry's toolset name ``mcp-<server>``
+    (the spelling the per-job allowlist accepts); both resolve to the same configured server.
     """
     requested = [str(name) for name in (job.get("enabled_toolsets") or [])]
     if not requested:
@@ -362,13 +364,25 @@ def _empty_requested_mcp_toolsets(job: dict, cfg: dict) -> Optional[str]:
     from hermes_cli.tools_config import enabled_mcp_server_names
     from toolsets import resolve_toolset
     from tools.mcp_tool_discovery import mcp_server_reconnecting
-    missing = [name for name in requested
-               if name in enabled_mcp_server_names(cfg) and not resolve_toolset(name)]
+    enabled = enabled_mcp_server_names(cfg)
+    configured = cfg.get("mcp_servers") if isinstance(cfg.get("mcp_servers"), dict) else {}
+    known = enabled | {str(name) for name in configured}
+    # ``mcp-<server>`` names the same server as its bare alias, unless a server is literally
+    # called ``mcp-<server>`` — the same rule the platform allowlist applies (_merge_mcp_servers).
+    # The mapping is also what the reconnect lookup needs: the MCP layer keys connections by the
+    # bare server name, so asking it about ``mcp-notion`` answers for a server that does not exist.
+    servers: dict[str, str] = {}
+    for name in requested:
+        if name in enabled:
+            servers[name] = name
+        elif name.startswith("mcp-") and name not in known and name[4:] in enabled:
+            servers[name] = name[4:]
+    missing = [name for name in requested if name in servers and not resolve_toolset(name)]
     # A server that worked in this process and is parked/self-probing after a network blip
     # (router reboot, DNS failure) is recovering, not misconfigured: the job runs with the tools
     # that did resolve rather than losing a whole tick to a minute of downtime (#112871). Only a
     # server that never connected for this profile is judged below.
-    reconnecting = sorted(name for name in missing if mcp_server_reconnecting(name))
+    reconnecting = sorted(name for name in missing if mcp_server_reconnecting(servers[name]))
     job_id = str(job.get("id", "?"))
     # One WARNING per job+server per outage (like the one-shot blocked_config alert), not one per
     # tick; the entry drops once the server is back so the next outage warns again.

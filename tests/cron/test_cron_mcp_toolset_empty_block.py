@@ -3,6 +3,9 @@ blocked as ``blocked_config`` instead of running tool-less and booking success (
 
 Under a multiplexer the server's toolset alias is process-global while its tools live in the
 discovering profile's registry overlay, so another profile's job sees the name but no tools.
+
+Every case runs with both spellings the job's allowlist accepts: the bare server name and the
+registry's toolset name ``mcp-<server>`` (#144294).
 """
 
 from __future__ import annotations
@@ -13,7 +16,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import cron.jobs as cron_jobs
+
+
+@pytest.fixture(params=["notion", "mcp-notion"])
+def mcp_name(request):
+    """The two names a job can use for the same MCP server."""
+    return request.param
 
 
 def _run_owned_job(job, tmp_path):
@@ -92,7 +103,7 @@ def _register_notion_in_scope(scope):
     registry.register_toolset_alias("notion", "mcp-notion")
     return lambda: registry.deregister("mcp__notion__search", scope=scope)
 
-def test_requested_mcp_server_owned_by_other_profile_blocks_run(tmp_path):
+def test_requested_mcp_server_owned_by_other_profile_blocks_run(tmp_path, mcp_name):
     from agent.secret_scope import set_multiplex_active
     from hermes_constants import hermes_home_key, reset_hermes_home_override, set_hermes_home_override
 
@@ -104,7 +115,7 @@ def test_requested_mcp_server_owned_by_other_profile_blocks_run(tmp_path):
         reset_hermes_home_override(token)
     try:
         (success, _output, _final, error), agent_built = _run(
-            _job(enabled_toolsets=["terminal", "notion"]), tmp_path)
+            _job(enabled_toolsets=["terminal", mcp_name]), tmp_path)
     finally:
         undo()
         set_multiplex_active(False)
@@ -113,11 +124,11 @@ def test_requested_mcp_server_owned_by_other_profile_blocks_run(tmp_path):
     assert success is False
     assert error is not None and "[blocked_config]" in error and "notion" in error
 
-def test_requested_mcp_server_with_tools_runs(tmp_path):
+def test_requested_mcp_server_with_tools_runs(tmp_path, mcp_name):
     undo = _register_notion_in_scope(None)
     try:
         (success, _output, _final, error), agent_built = _run(
-            _job(enabled_toolsets=["terminal", "notion"]), tmp_path)
+            _job(enabled_toolsets=["terminal", mcp_name]), tmp_path)
     finally:
         undo()
 
@@ -146,25 +157,25 @@ def _park_notion(home, *, ever_connected: bool, park_reason=None):
     core._servers[key] = server
     return lambda: core._servers.pop(key, None)
 
-def test_requested_mcp_server_reconnecting_runs_without_its_tools(tmp_path):
+def test_requested_mcp_server_reconnecting_runs_without_its_tools(tmp_path, mcp_name):
     """A server that connected in this process and is parked/self-probing after a network blip
     is recoverable: the job runs with the tools that did resolve instead of blocking (#112871)."""
     undo = _park_notion(tmp_path, ever_connected=True)
     try:
         (success, _output, _final, error), agent_built = _run(
-            _job(enabled_toolsets=["terminal", "notion"]), tmp_path)
+            _job(enabled_toolsets=["terminal", mcp_name]), tmp_path)
     finally:
         undo()
 
     assert agent_built is True
     assert success is True and error is None
 
-def test_requested_mcp_server_never_connected_still_blocks(tmp_path):
+def test_requested_mcp_server_never_connected_still_blocks(tmp_path, mcp_name):
     """A parked server that never connected here (bad URL, wrong credentials) keeps the block."""
     undo = _park_notion(tmp_path, ever_connected=False)
     try:
         (success, _output, _final, error), agent_built = _run(
-            _job(enabled_toolsets=["terminal", "notion"]), tmp_path)
+            _job(enabled_toolsets=["terminal", mcp_name]), tmp_path)
     finally:
         undo()
 
@@ -172,14 +183,14 @@ def test_requested_mcp_server_never_connected_still_blocks(tmp_path):
     assert success is False
     assert error is not None and "[blocked_config]" in error and "notion" in error
 
-def test_requested_mcp_server_parked_on_permanent_error_blocks(tmp_path):
+def test_requested_mcp_server_parked_on_permanent_error_blocks(tmp_path, mcp_name):
     """A server that connected once and then parked on a PERMANENT error (revoked credentials,
     endpoint gone) is not recovering: its self-probe fails identically every time, so the job must
     take the one-shot blocked_config path instead of silently running tool-less forever."""
     undo = _park_notion(tmp_path, ever_connected=True, park_reason="from parked state (permanent error)")
     try:
         (success, _output, _final, error), agent_built = _run(
-            _job(enabled_toolsets=["terminal", "notion"]), tmp_path)
+            _job(enabled_toolsets=["terminal", mcp_name]), tmp_path)
     finally:
         undo()
 
