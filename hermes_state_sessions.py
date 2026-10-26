@@ -1352,7 +1352,8 @@ class SessionSessionsMixin:
         id_query: str | None = None, search_query: str | None = None, compact_rows: bool = False,
         include_pinned: bool = False, session_key: str | None = None, include_hidden: bool = False,
         include_subagents: bool = False, local_created_sources: Sequence[str] | None = None,
-    ) -> list[dict[str, Any]]:
+        return_recency_count: bool = False,
+    ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int]:
         """List sessions with preview and ``last_active`` in one query. ``order_by_last_active`` sorts
         by the chain TIP via a recursive CTE (the only path honouring ``id_query`` / ``search_query``);
         ``include_pinned`` back-fills pins the page missed, still obeying the other
@@ -1438,10 +1439,9 @@ class SessionSessionsMixin:
             """
             params.extend([limit, offset])
         sessions = [self._list_row(row) for row in self._read_all(query, params)]
-        # Pinned back-fill runs BEFORE compression projection so a back-filled root
-        # projects to its tip like any other row. Do not inherit the archived
-        # constraint: the sidebar lists with include_archived=False, and a pin
-        # must stay reachable even when that row is also archived.
+        recency_count = len(sessions)  # the LIMIT/OFFSET window, before the back-fill appends pins
+        # Pinned back-fill runs BEFORE compression projection (a back-filled root projects to its
+        # tip) and ignores the archived filter: a keep must stay reachable even when also archived.
         if include_pinned:
             seen_ids = {s["id"] for s in sessions}
             pinned_clauses, pinned_params = _session_filter_where(
@@ -1475,7 +1475,7 @@ class SessionSessionsMixin:
         # last_read_at is lineage-stamped, so root and tip watermarks agree.
         for s in sessions:
             s["unread"] = self.session_unread(s)
-        return sessions
+        return (sessions, recency_count) if return_recency_count else sessions
 
     def session_lifecycle_statuses(self, session_ids: list[str]) -> dict[str, str]:
         """``{session_id: status}`` from each session's LAST message row (``'empty'`` when none); one

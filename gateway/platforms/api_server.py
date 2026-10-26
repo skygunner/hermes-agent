@@ -2546,18 +2546,19 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         include_hidden = bool(title_filter) and _coerce_request_bool(
             request.query.get("include_hidden"), default=False)
 
-        async def _list() -> list:
-            # include_pinned back-fills pins past the recency window; search_query pushes the
-            # title needle into SQL (substring) so a hidden/old row is found, exact match below.
-            rows = await asyncio.to_thread(
+        async def _list() -> tuple[list, int]:
+            # include_pinned back-fills pins past the recency window; search_query narrows in SQL (exact match below).
+            rows, window = await asyncio.to_thread(
                 db.list_sessions_rich, source=source, limit=limit, offset=offset,
                 include_children=include_children, order_by_last_active=True, include_pinned=True,
-                search_query=title_filter, include_hidden=include_hidden)
+                search_query=title_filter, include_hidden=include_hidden, return_recency_count=True)
             if title_filter:
                 rows = [s for s in rows if (s.get("title") or "").strip() == title_filter]
-            return rows
+            return rows, window
 
-        sessions = await _list() or (await reset_local_title_owner(db, title_filter, include_hidden, source))
+        sessions, windowed = await _list()
+        if not sessions:
+            sessions, windowed = await reset_local_title_owner(db, title_filter, include_hidden, source), 0
         if title_filter and not sessions:
             # A canonical Bot Chat auto-archived by the orphan reaper would make `hermes peer dm`
             # mint transient sessions: resurrect and re-list; deliberate archives stay put.
@@ -2575,11 +2576,10 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                     return bool(stale and stale.get("archived") and db.unarchive_recoverable_session(stale["id"]))
 
                 if title_filter == BOT_CHAT_TITLE and await asyncio.to_thread(_resurrect):
-                    sessions = await _list()
+                    sessions, windowed = await _list()
             except Exception:
                 pass  # resolution degrades to today's no-row behavior
-        # Back-filled pins arrive PAST the limit: counting them would report a page that doesn't exist.
-        windowed = sum(1 for s in sessions if not s.get("pinned"))
+        # Back-filled pins arrive PAST the limit: has_more reads the recency window, not them (#144349).
         return web.json_response({
             "object": "list", "data": [self._session_response(s) for s in sessions],
             "limit": limit, "offset": offset, "has_more": windowed >= limit})
