@@ -797,10 +797,21 @@ def normalize_stream_usage(message_stream: Any) -> Any:
     return message_stream
 
 
+# Only a standalone stream/streaming/streams word means the provider rejects streaming itself: a
+# bare substring also matches "upstream", "stream_options" and a "stream-json" stderr tail (#144896).
+# The trailing hyphen is that compound; "text/event-stream" is the SSE media type and still counts.
+_STREAM_WORD = re.compile(r"\bstream(?:ing|s)?(?![\w-])")
+
+
+def _mentions_stream_unsupported(err_lower: str) -> bool:
+    """True when the message says streaming itself is unsupported."""
+    return bool(_STREAM_WORD.search(err_lower)) and "not supported" in err_lower
+
+
 def _is_stream_unavailable_error(exc: Exception) -> bool:
     """True when an Anthropic stream call should fall back to create()."""
     err_lower = str(exc).lower()
-    if "stream" in err_lower and "not supported" in err_lower:
+    if _mentions_stream_unsupported(err_lower):
         return True
     if "unexpected event order" in err_lower:
         return True

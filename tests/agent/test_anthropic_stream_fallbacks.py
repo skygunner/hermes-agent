@@ -1,4 +1,8 @@
-"""Invariants: Anthropic stream failures fall back or stub in a shape the loop accepts."""
+"""Invariants: Anthropic stream failures fall back or stub in a shape the loop accepts.
+
+Regression for #144896: only an error that names *streaming* as unsupported may fall back or
+switch the session to non-streaming; "upstream ... not supported" is an ordinary 400.
+"""
 
 from types import SimpleNamespace
 
@@ -124,3 +128,42 @@ def test_main_turn_event_order_error_disables_streaming(provider, disabled):
     with pytest.raises(RuntimeError, match="Unexpected event order"):
         agent._interruptible_streaming_api_call({"model": "MiniMax-M2", "messages": [], "max_tokens": 8})
     assert bool(getattr(agent, "_disable_streaming", False)) is disabled
+
+
+@pytest.mark.parametrize("wording", [
+    "Incomplete upstream response (first attempt: status 400, upstream said: adaptive thinking is "
+    "not supported on this model)",
+    "Native history replay not supported: provider has no history\n"
+    "native stderr: Error: --input-format stream-json is not supported",
+    "For 'integer' type, properties maximum, minimum are not supported",
+    "prompt is too long: 208000 tokens > 200000 maximum",
+])
+def test_unrelated_not_supported_error_still_streams(wording):
+    # The stream is not rejected: the error must propagate instead of re-billing via create().
+    client, created = _client(RuntimeError(wording))
+    with pytest.raises(RuntimeError):
+        create_anthropic_message(client, {"model": "m", "messages": [], "max_tokens": 8, "stream": True})
+    assert created == []
+
+
+@pytest.mark.parametrize("wording", [
+    "streaming is not supported",
+    "stream not supported for this model",
+    "Stream mode is not supported",
+    "streams are not supported for this endpoint",
+    "text/event-stream is not supported",  # the SSE media type names streaming itself
+])
+def test_stream_unsupported_wording_falls_back_to_create(wording):
+    client, created = _client(RuntimeError(wording))
+    create_anthropic_message(client, {"model": "m", "messages": [], "max_tokens": 8, "stream": True})
+    assert len(created) == 1 and "stream" not in created[0]
+
+
+def test_upstream_400_keeps_the_session_streaming():
+    # #144896: a wrapped 400 must not latch _disable_streaming on the cached agent for the session.
+    err = RuntimeError("Incomplete upstream response (first attempt: status 400, upstream said: "
+                       "adaptive thinking is not supported on this model)")
+    agent = _anthropic_agent(lambda: _BrokenStream(err))
+    with pytest.raises(RuntimeError, match="upstream said"):
+        agent._interruptible_streaming_api_call({"model": "MiniMax-M2", "messages": [], "max_tokens": 8})
+    assert agent._disable_streaming is False
