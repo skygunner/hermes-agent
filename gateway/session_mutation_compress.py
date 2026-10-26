@@ -72,7 +72,7 @@ async def prepare_compress(authority, live, payload, prepared):
             compressor = ContextCompressor(model, base_url=runtime.get('base_url') or '',
                 api_key=runtime.get('api_key') or '', provider=runtime.get('provider') or '',
                 api_mode=runtime.get('api_mode') or '', quiet_mode=True, abort_on_summary_failure=True,
-                protect_first_n=options.get('protect_first_n', 3), protect_last_n=options.get('protect_last_n', 20),
+                protect_first_n=options.get('protect_first_n', 3), protect_last_n=0 if request.partial else options.get('protect_last_n', 20),
                 min_tail_user_messages=max(1, _parse_config_int(options.get('min_tail_user_messages', 1), 1)),
                 custom_providers=config.get('custom_providers'))
             compressed = compressor.compress(json.loads(json.dumps(head)), force=True,

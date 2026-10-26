@@ -294,3 +294,47 @@ def test_cold_estimate_resolves_a_legacy_name_list_pin_like_the_restored_agent()
         assert cold == warm, f'legacy pin undercounts: cold={cold}, restored resident={warm}'
     finally:
         registry.deregister('review_pin_probe')
+
+
+@pytest.mark.asyncio
+async def test_partial_compress_does_not_shield_the_head_tail(tmp_path, monkeypatch):
+    """`/compress here N` keeps its tail verbatim, so the compressor must not also protect the last
+    N messages of the head it was asked to summarize (regression for #144423)."""
+    from gateway import run
+    from gateway.config import GatewayConfig
+    from gateway.session import SessionStore
+    from agent.context_compressor import ContextCompressor
+
+    monkeypatch.setattr(run, '_load_gateway_config', dict)
+    store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+    db = store._db
+    epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+    seen = []
+
+    def init(self, *a, **kw):
+        seen.append(kw)
+
+    def compress(self, messages, **kw):
+        return [{'role': 'user', 'content': 'summary', '_compressed_summary': True}]
+
+    monkeypatch.setattr(ContextCompressor, '__init__', init)
+    monkeypatch.setattr(ContextCompressor, 'compress', compress)
+    runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False,
+                             _evict_cached_agent=lambda route: None, _cached_agent_for=lambda route: None,
+                             _resolve_session_agent_runtime=lambda **k: ('frozen', {}))
+    authority = SessionAuthority(runner, profile_id=str(tmp_path), instance_id='owner', db=db, epoch=epoch)
+    owner = AuthorityConnection(authority, object(), {'user_id': 'human'})
+    ref = create_local_session(authority, owner.actor, dict(request_id='partial', source='cli', cwd=str(tmp_path),
+                                                              model='frozen', toolsets=[]))
+    for i in range(6):
+        db.append_message(ref.session_id, 'user', f'question {i}')
+        db.append_message(ref.session_id, 'assistant', f'answer {i}')
+    before = db.get_session(ref.session_id)
+    try:
+        await owner.dispatch({'id': 1, 'method': 'session.mutate', 'params': {
+            'session_id': ref.session_id, 'request_id': 'compress-partial', 'expected_revision': before['runtime_revision'],
+            'expected_generation': before['runtime_generation'], 'operation': 'compress',
+            'payload': {'partial': True, 'keep_last': 2}}})
+        assert seen and seen[-1]['protect_last_n'] == 0
+    finally:
+        await owner.close()
