@@ -83,6 +83,29 @@ async def test_initialization_failure_is_a_failed_receipt_not_completed(api, own
 
 
 @pytest.mark.asyncio
+async def test_run_sse_tool_completed_carries_the_producers_result_preview(api, owner):
+    """Regression for #144404: the canonical runs lane dropped the tool result one hop before
+    the event callback, so tool.completed.preview was empty while the tool had produced output.
+    The preview is the existing bounded, redacted summary of the real result."""
+    admitted = admit_api_turn(api, session_id='sse-preview', user_message='hello', conversation_history=[])
+    _, ref, _row = admitted
+    launch, queue = _launch(api, admitted, run_id='run_preview')
+
+    async def handle(event):
+        from gateway.session_results import execution_result
+        turn = _turn_runner(owner, ref)
+        turn.combined_tool_complete_callback('call-1', 'terminal', {'command': 'echo hello'}, 'hello\nEND-MARK')
+        turn.combined_tool_complete_callback('call-2', 'read_file', {'path': 'big.txt'}, 'x' * 4000)
+        execution_result.get()['result'] = {'final_response': 'ok'}
+        return 'ok'
+    owner.runner._handle_message = handle
+    await _execute_run(api, launch, _api_server=_api_server)
+    await asyncio.sleep(0)  # call_soon_threadsafe projections land on the loop
+    previews = [e['preview'] for e in _events(queue) if e['event'] == 'tool.completed']
+    assert previews == ['hello\nEND-MARK', 'x' * 497 + '...']
+
+
+@pytest.mark.asyncio
 async def test_run_sse_carries_controls_tool_payloads_and_authoritative_cancellation(api, owner):
     from tools import clarify_gateway
     admitted = admit_api_turn(api, session_id='sse', user_message='hello', conversation_history=[])
