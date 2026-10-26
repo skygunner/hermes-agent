@@ -2,8 +2,14 @@
 
 Tests the pure policy resolver (no gateway plumbing). Integration tests that
 exercise the dispatch site live in test_slash_access_dispatch.py.
+
+Regression for #144428: WhatsApp delivers one operator as a bare number, a phone JID or a LID
+while ``allow_admin_from`` was compared by exact string, so a phone-listed admin fell to the
+non-admin floor whenever the message arrived as a LID.
 """
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -13,6 +19,7 @@ from gateway.slash_access import (
     policy_for_source,
     policy_from_extra,
 )
+from hermes_constants import get_hermes_home
 
 
 # ---------------------------------------------------------------------------
@@ -146,3 +153,65 @@ def test_blank_chat_type_resolves_to_the_gated_scope(extra, chat_type, admin, ga
     assert p.can_run("999", "stop") is (not gated)
     if admin is not None:
         assert p.is_admin(admin) is True
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp identity aliases — allow_admin_from matches every form of one operator
+# ---------------------------------------------------------------------------
+
+_PHONE = "351912345678"
+_LID = "77214955630717"
+
+
+def _write_lid_mapping():
+    """Mirror what the JS bridge writes: phone→LID and LID→phone (reverse)."""
+    session_dir = get_hermes_home() / "whatsapp" / "session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / f"lid-mapping-{_PHONE}.json").write_text(json.dumps(_LID), encoding="utf-8")
+    (session_dir / f"lid-mapping-{_LID}_reverse.json").write_text(
+        json.dumps(_PHONE), encoding="utf-8"
+    )
+
+
+def _policy(extra, *, platform=Platform.WHATSAPP, chat_type="dm", user_id=f"{_LID}@lid"):
+    cfg = GatewayConfig(platforms={platform: PlatformConfig(enabled=True, extra=extra)})
+    src = SessionSource(platform=platform, chat_id="c1", chat_type=chat_type, user_id=user_id)
+    return policy_for_source(cfg, src)
+
+
+class TestWhatsAppAliasedAdmin:
+
+    def test_admin_listed_as_phone_number_matches_lid_sender(self):
+        _write_lid_mapping()
+        p = _policy({"allow_admin_from": [_PHONE]})
+        assert p.is_admin(f"{_LID}@lid") is True
+        assert p.can_run(f"{_LID}@lid", "model") is True
+
+    def test_admin_listed_as_phone_number_matches_phone_jid_sender(self):
+        _write_lid_mapping()
+        p = _policy({"allow_admin_from": [_PHONE]})
+        assert p.is_admin(f"{_PHONE}@s.whatsapp.net") is True
+
+    def test_group_admin_listed_as_phone_number_matches_lid_sender(self):
+        _write_lid_mapping()
+        p = _policy({"group_allow_admin_from": [_PHONE]}, chat_type="group")
+        assert p.is_admin(f"{_LID}@lid") is True
+        assert p.can_run(f"{_LID}@lid", "model") is True
+
+    def test_whatsapp_cloud_uses_the_same_aliases(self):
+        _write_lid_mapping()
+        p = _policy({"allow_admin_from": [_PHONE]}, platform=Platform.WHATSAPP_CLOUD)
+        assert p.is_admin(f"{_LID}@lid") is True
+
+    def test_unrelated_sender_stays_on_the_non_admin_floor(self):
+        _write_lid_mapping()
+        p = _policy({"allow_admin_from": [_PHONE]})
+        assert p.is_admin("999999999999999@lid") is False
+        assert p.can_run("999999999999999@lid", "model") is False
+        assert p.can_run("999999999999999@lid", "help") is True
+
+    def test_other_platforms_keep_exact_matching(self):
+        _write_lid_mapping()
+        p = _policy({"allow_admin_from": [_PHONE]}, platform=Platform.DISCORD)
+        assert p.is_admin(f"{_PHONE}@s.whatsapp.net") is False
+        assert p.is_admin(_PHONE) is True

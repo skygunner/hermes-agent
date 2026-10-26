@@ -26,6 +26,10 @@ _SCOPE_KEYS = {
     "group": ("group_allow_admin_from", "group_user_allowed_commands"),
 }
 
+# WhatsApp (Baileys and Cloud) delivers one operator as a bare number, a phone JID or a LID;
+# every other platform compares sender ids exactly.
+_WHATSAPP_IDENTITY_PLATFORMS = frozenset({"whatsapp", "whatsapp_cloud"})
+
 
 @dataclass(frozen=True)
 class SlashAccessPolicy:
@@ -34,12 +38,28 @@ class SlashAccessPolicy:
     enabled: bool  # gating active for this scope?
     admin_user_ids: frozenset[str]
     user_allowed_commands: frozenset[str]
+    # WhatsApp identity aliases (bare number / phone JID / LID) for one user (#144428); None keeps
+    # exact matching for every other platform.
+    alias_expander: Optional[Callable[[str], set[str]]] = None
 
     def is_admin(self, user_id: Optional[str]) -> bool:
         # Gating disabled -> everyone is admin so callers can use is_admin/can_run uniformly.
         if not self.enabled:
             return True
-        return bool(user_id) and str(user_id) in self.admin_user_ids
+        if not user_id:
+            return False
+        user_id = str(user_id)
+        if user_id in self.admin_user_ids:
+            return True
+        if self.alias_expander is None:
+            return False
+        # An operator listed by phone number must still be admin when WhatsApp delivers the
+        # message under a LID: compare alias closures, the canonicalization the adapter
+        # allowlist and profile routing already use.
+        aliases = self.alias_expander(user_id)
+        return bool(aliases) and any(
+            aliases & self.alias_expander(admin_id) for admin_id in self.admin_user_ids
+        )
 
     def can_run(self, user_id: Optional[str], canonical_cmd: str) -> bool:
         if self.is_admin(user_id):
@@ -83,18 +103,33 @@ def _coerce_command_list(raw: Any) -> frozenset[str]:
     return _coerce_list(raw, lambda s: s.lstrip("/").lower())
 
 
-def policy_from_extra(extra: dict, scope: str) -> SlashAccessPolicy:
+def policy_from_extra(
+    extra: dict, scope: str, alias_expander: Optional[Callable[[str], set[str]]] = None
+) -> SlashAccessPolicy:
     """Build a policy from a platform's ``extra`` dict for one scope.
 
     DM scope falls back to ``group_user_allowed_commands`` ONLY for the command list, and only
     when DM didn't set its own. Admin lists are NOT cross-scope: a DM admin is not a group admin.
+    ``alias_expander`` resolves platform identity aliases (WhatsApp phone/JID/LID).
     """
     admin_key, cmd_key = _SCOPE_KEYS.get(scope, _SCOPE_KEYS["dm"])
     admin_ids = _coerce_id_list(extra.get(admin_key))
     cmds = _coerce_command_list(extra.get(cmd_key))
     if scope == "dm" and not cmds:
         cmds = _coerce_command_list(extra.get("group_user_allowed_commands"))
-    return SlashAccessPolicy(enabled=bool(admin_ids), admin_user_ids=admin_ids, user_allowed_commands=cmds)
+    return SlashAccessPolicy(
+        enabled=bool(admin_ids),
+        admin_user_ids=admin_ids,
+        user_allowed_commands=cmds,
+        alias_expander=alias_expander,
+    )
+
+
+def _whatsapp_aliases(identifier: str) -> set[str]:
+    """WhatsApp phone/JID/LID alias closure for one sender id (reads the bridge's lid-mapping files)."""
+    from gateway.whatsapp_identity import expand_whatsapp_aliases
+
+    return expand_whatsapp_aliases(identifier)
 
 
 def policy_for_source(gateway_config: Any, source: Any) -> SlashAccessPolicy:
@@ -116,17 +151,19 @@ def policy_for_source(gateway_config: Any, source: Any) -> SlashAccessPolicy:
     extra = getattr(platform_config, "extra", None)
     if not isinstance(extra, dict):
         extra = platform_config if isinstance(platform_config, dict) else {}
+    platform_name = str(getattr(source.platform, "value", source.platform) or "").strip().lower()
+    alias_expander = _whatsapp_aliases if platform_name in _WHATSAPP_IDENTITY_PLATFORMS else None
     chat_type = getattr(source, "chat_type", None)
     normalized = str(chat_type).strip().lower() if chat_type is not None else ""
     if normalized:
         scope = "dm" if normalized in _DM_CHAT_TYPES else "group"
-        return policy_from_extra(extra, scope)
+        return policy_from_extra(extra, scope, alias_expander)
     # Blank/None chat_type is ambiguous (relay frames may send "" / null; restored rows keep a
     # stored empty value verbatim). _DM_CHAT_TYPES lists "" but a truthiness guard made it
     # unreachable: resolve to whichever scope is gated so an ambiguous source never lands in an
     # ungated allow-everything scope; keep the historical group scope on a tie.
-    dm_policy = policy_from_extra(extra, "dm")
-    group_policy = policy_from_extra(extra, "group")
+    dm_policy = policy_from_extra(extra, "dm", alias_expander)
+    group_policy = policy_from_extra(extra, "group", alias_expander)
     return dm_policy if dm_policy.enabled and not group_policy.enabled else group_policy
 
 
