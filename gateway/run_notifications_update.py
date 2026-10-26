@@ -58,8 +58,12 @@ class GatewayUpdateNotificationsMixin:
             return self.pending.exists() or self.claimed.exists()
 
         def unlink_all(self) -> None:
+            # A marker the OS refuses to delete must not abort the caller: on Windows the running
+            # updater still holds .update_output.txt open as its own stdout (WinError 32), and an
+            # unremovable marker is simply retried by the next startup's cleanup (#143401).
             for p in (self.pending, self.claimed, self.output, self.exit_code, self.prompt, self.response):
-                p.unlink(missing_ok=True)
+                with suppress(OSError):
+                    p.unlink(missing_ok=True)
 
     @dataclasses.dataclass
     class _UpdateTarget:
@@ -369,6 +373,9 @@ class GatewayUpdateNotificationsMixin:
             logger.warning("Post-update notification failed: %s", e)
         finally:
             if cleanup:
+                # Same open-file race as unlink_all: cleanup is best-effort and runs in a finally,
+                # so an escaping OSError here would replace the result and kill gateway startup.
                 for p in (active_pending_path, paths.claimed, paths.output, paths.exit_code):
-                    p.unlink(missing_ok=True)
+                    with suppress(OSError):
+                        p.unlink(missing_ok=True)
         return True

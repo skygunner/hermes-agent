@@ -427,6 +427,52 @@ class TestSendUpdateNotification:
         assert not output_path.exists()
         assert not exit_code_path.exists()
 
+    @pytest.mark.asyncio
+    async def test_cleanup_tolerates_marker_the_os_refuses_to_delete(self, tmp_path):
+        """A locked marker never replaces the notification's result.
+
+        Regression for #143401: on Windows the updater restarts the gateway while
+        still writing its final lines to ``.update_output.txt``, which is its own
+        stdout redirect, so the gateway's ``unlink`` gets ``PermissionError:
+        [WinError 32]``. The cleanup runs in a ``finally``, so that error escaped
+        ``except Exception``, aborted gateway startup and left the bot silent until
+        a human restarted it.
+        """
+        runner = _make_runner()
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+
+        pending_path = hermes_home / ".update_pending.json"
+        output_path = hermes_home / ".update_output.txt"
+        exit_code_path = hermes_home / ".update_exit_code"
+        pending_path.write_text(json.dumps({
+            "platform": "telegram", "chat_id": "67890", "user_id": "12345",
+        }))
+        output_path.write_text("✓ Done")
+        exit_code_path.write_text("0")
+
+        mock_adapter = AsyncMock()
+        runner.adapters = {Platform.TELEGRAM: mock_adapter}
+
+        real_unlink = Path.unlink
+
+        def _unlink_but_output_locked(self, *args, **kwargs):
+            if self == output_path:
+                raise PermissionError(
+                    32, "The process cannot access the file because it is being used by another process", str(self)
+                )
+            return real_unlink(self, *args, **kwargs)
+
+        with patch("gateway.run._hermes_home", hermes_home), \
+             patch.object(Path, "unlink", _unlink_but_output_locked):
+            result = await runner._send_update_notification()
+
+        assert result is True
+        mock_adapter.send.assert_called_once()
+        assert not pending_path.exists()
+        assert not exit_code_path.exists()
+        assert output_path.exists(), "an undeletable marker stays for the next startup's cleanup"
+
 
     @pytest.mark.asyncio
     async def test_no_adapter_for_platform_preserves_markers(self, tmp_path):
