@@ -2821,3 +2821,23 @@ def _count_rows(db_path: Path) -> tuple[int, int]:
         )
     finally:
         conn.close()
+
+
+def test_write_zip_entries_skips_a_file_that_vanished_after_the_scan(tmp_path):
+    """A file deleted between the scan and the archive step is not a backup failure (#144066): it must
+    not be reported through on_error, which turns into exit 1 and skips --keep pruning."""
+    from hermes_cli.backup import _write_zip_entries
+
+    present = tmp_path / 'kept.txt'
+    present.write_text('kept')
+    missing = tmp_path / 'gone.txt'
+    entries = [(present, Path('kept.txt')), (missing, Path('gone.txt'))]
+    errors = []
+    out = tmp_path / 'backup.zip'
+    with zipfile.ZipFile(out, 'w') as zf:
+        total = _write_zip_entries(zf, entries, out, on_db_failure=lambda rel: errors.append(('db', rel)),
+                                   on_error=lambda rel, exc: errors.append((str(rel), type(exc).__name__)),
+                                   on_progress=lambda i: None, track_bytes=True)
+    assert errors == []
+    assert total == 4
+    assert zipfile.ZipFile(out).namelist() == ['kept.txt']
