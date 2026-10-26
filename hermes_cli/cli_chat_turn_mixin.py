@@ -592,6 +592,15 @@ class CLIChatTurnMixin:
         if self._voice_tts and response and not turn.use_streaming_tts:
             self._voice_speak_response_async(response)
 
+        # A /steer the agent finished before absorbing becomes the next user turn. It is
+        # enqueued BEFORE the interrupt batch: both share this FIFO, and guidance must reach
+        # the turn it was meant for instead of trailing behind it (#30323).
+        _leftover_steer = turn.result.get("pending_steer") if turn.result else None
+        if _leftover_steer:
+            preview = _leftover_steer[:60] + ("..." if len(_leftover_steer) > 60 else "")
+            _cprint(f"\n{t('cli.chat.delivering_leftover_steer', preview=preview)}")
+            self._pending_input.put(_leftover_steer)
+
         # Re-queue the interrupt message (plus any that arrived meanwhile) as the next
         # prompt. Only reached in busy_input_mode == "interrupt"; "queue" mode routes
         # Enter straight to _pending_input.
@@ -625,13 +634,6 @@ class CLIChatTurnMixin:
             else:
                 _cprint(f"\n{t('cli.chat.sending_after_interrupt', preview=preview)}")
             self._pending_input.put(payload)
-
-        # A /steer the agent finished before absorbing becomes the next user turn.
-        _leftover_steer = turn.result.get("pending_steer") if turn.result else None
-        if _leftover_steer:
-            preview = _leftover_steer[:60] + ("..." if len(_leftover_steer) > 60 else "")
-            _cprint(f"\n{t('cli.chat.delivering_leftover_steer', preview=preview)}")
-            self._pending_input.put(_leftover_steer)
 
         return response
 
