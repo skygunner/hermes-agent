@@ -749,6 +749,8 @@ class WebhookAdapter(BasePlatformAdapter):
                                               route_name=route_name, profile=profile, event_type=event_type)
         if outcome is None:
             return _json_error("Admission unavailable; retry this delivery", 503)
+        if outcome == "rejected":
+            return _json_error("Webhook destination rejected; fix the route's destination", 400)
         if outcome == "duplicate":
             return web.json_response({"status": "duplicate", "delivery_id": delivery_id}, status=200)
         return web.json_response({"status": "accepted", "route": route_name, "event": event_type,
@@ -763,7 +765,7 @@ class WebhookAdapter(BasePlatformAdapter):
         async def _admit_or_log():
             outcome = await self._admit_agent_run(payload, prompt, delivery_id, now, route_config=route_config,
                                                   route_name=route_name, profile=profile, event_type=event_type)
-            if outcome is None:
+            if outcome in (None, "rejected"):
                 logger.error("[webhook] Coalesced delivery %s on route %s was not admitted", delivery_id, route_name)
                 for released in (*superseded, delivery_id):
                     self._seen_deliveries.pop(_WebhookDeliveryIdentity.from_parts(profile, route_name, released), None)
@@ -808,8 +810,15 @@ class WebhookAdapter(BasePlatformAdapter):
         event = MessageEvent(text=prompt, message_type=MessageType.TEXT, source=source, raw_message=payload,
                              message_id=delivery_id, timestamp=datetime.fromtimestamp(0, UTC))
         from gateway.platforms.webhook_ingress import admit_producer
+        from hermes_state_runtime import RuntimeStoreError
         try:
             receipt = await admit_producer(self, event)
+        except RuntimeStoreError as exc:
+            if exc.args and exc.args[0] == 'invalid_params':
+                logger.warning("[webhook] Delivery %s names an invalid destination: %s", delivery_id, exc)
+                return "rejected"
+            logger.exception("[webhook] Durable admission failed for %s", delivery_id)
+            return None
         except Exception:
             logger.exception("[webhook] Durable admission failed for %s", delivery_id)
             return None

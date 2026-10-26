@@ -1283,3 +1283,22 @@ class TestBlankRouteSecretFailsClosed:
 )
 def test_is_usable_secret_classifies_configured_secrets(value, usable):
     assert _is_usable_secret(value) is usable
+
+
+@pytest.mark.asyncio
+async def test_invalid_destination_is_a_400_not_a_retryable_503(monkeypatch):
+    """A route whose destination the store refuses is permanent (#143793): the adapter used to swallow the
+    store's RuntimeStoreError('invalid_params') and answer 503, so the sender retried forever."""
+    from gateway.platforms import webhook_ingress
+    from hermes_state_runtime import RuntimeStoreError
+
+    adapter = _make_adapter(routes={'r1': {'secret': '{{SECRET_x}}', 'prompt': 'x'}})
+
+    async def refuse(adapter_self, event):
+        raise RuntimeStoreError('invalid_params')
+
+    monkeypatch.setattr(webhook_ingress, 'admit_producer', refuse)
+    outcome = await adapter._admit_agent_run({'x': 1}, 'prompt', 'delivery-1', time.time(),
+                                             route_config={'deliver': 'log'}, route_name='r1',
+                                             profile=None, event_type='push')
+    assert outcome == 'rejected'
