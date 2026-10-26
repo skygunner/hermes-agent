@@ -1,5 +1,7 @@
 """Regression tests for the Discord /model picker.
 
+#143851: the picker's 2-minute timeout repainted the message after a confirmed switch.
+
 Uses the shared discord mock from tests/gateway/conftest.py (installed
 at collection time via _ensure_discord_mock()). Previously this file
 installed its own mock at module-import time and clobbered sys.modules,
@@ -81,5 +83,58 @@ async def test_model_picker_clears_controls_before_running_switch_callback():
     interaction.response.edit_message.assert_awaited_once()
     interaction.response.defer.assert_not_called()
     interaction.edit_original_response.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_picker_timeout_only_repaints_an_unresolved_picker():
+    async def on_model_selected(chat_id: str, model_id: str, provider_slug: str) -> str:
+        return "Model switched"
+
+    def make_view() -> ModelPickerView:
+        return ModelPickerView(
+            providers=[
+                {
+                    "slug": "copilot",
+                    "name": "GitHub Copilot",
+                    "models": ["gpt-5.4"],
+                    "total_models": 1,
+                    "is_current": True,
+                }
+            ],
+            current_model="gpt-5-mini",
+            current_provider="copilot",
+            session_key="session-1",
+            on_model_selected=on_model_selected,
+            allowed_user_ids={"123"},
+        )
+
+    switched = make_view()
+    switched._message = message = SimpleNamespace(edit=AsyncMock())
+    switched._selected_provider = "copilot"
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=123),
+        channel_id=456,
+        data={"values": ["gpt-5.4"]},
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), edit_message=AsyncMock()),
+        edit_original_response=AsyncMock(),
+    )
+
+    await switched._on_model_selected(interaction)
+    await switched.on_timeout()
+
+    # The timeout must leave the confirmed switch on the message alone.
+    message.edit.assert_not_awaited()
+    confirmed = interaction.edit_original_response.await_args.kwargs["embed"]
+    assert confirmed.description == "Model switched"
+
+    expired = make_view()
+    expired._message = message = SimpleNamespace(edit=AsyncMock())
+
+    await expired.on_timeout()
+
+    # An untouched picker still greys out instead of staying clickable.
+    message.edit.assert_awaited_once()
+    assert message.edit.await_args.kwargs["embed"].description != "Model switched"
+    assert expired.children == []
 
 
