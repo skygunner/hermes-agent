@@ -266,8 +266,36 @@ def _effective_terminal_backend(config: dict) -> str:
     return config_backend
 
 
+def _pooled_providers() -> set[str]:
+    """Credential-pool provider ids whose ``auth.json`` rows hold a live token."""
+    from hermes_cli.auth import read_credential_pool
+
+    try:
+        pool = read_credential_pool() or {}
+    except OSError:  # an unreadable auth.json must not break `hermes debug`
+        return set()
+    return {
+        provider for provider, rows in pool.items()
+        if any(isinstance(row, dict) and str(row.get("access_token") or "").strip() for row in rows or ())
+    }
+
+
+def _pool_provider_ids(env_var: str, label: str) -> set[str]:
+    """Pool provider ids a dump label can be authenticated under.
+
+    ``hermes auth add`` files a credential under the provider's registry id, which can differ from the
+    dump label (``openai`` → ``openai-api``, ``kimi`` → ``kimi-coding``), so ask the registry which
+    providers own this env var instead of keeping a second label→id table in sync."""
+    from hermes_cli.auth import PROVIDER_REGISTRY
+
+    ids = {label, label.replace("_", "-")}
+    ids.update(pid for pid, cfg in PROVIDER_REGISTRY.items() if env_var in (cfg.api_key_env_vars or ()))
+    return ids
+
+
 def _api_key_lines(show_keys: bool) -> list[str]:
     dotenv_keys = _dotenv_key_names()
+    pooled = _pooled_providers()
     lines = []
     for env_var, label in _API_KEYS:
         val = os.getenv(env_var, "")
@@ -276,17 +304,11 @@ def _api_key_lines(show_keys: bool) -> list[str]:
         # shell, so it likely can't see this key — flag it so support doesn't chase a phantom "configured".
         if val and env_var not in dotenv_keys:
             display += " (shell only — not in .env; managed/desktop backend may not see it)"
-        # `hermes auth add openrouter` credentials live in the pool, not env — don't read "not set".
-        # A credential added via `hermes auth add openrouter` lives in the credential pool, not as an env
-        # var — surface it so the dump doesn't misleadingly read "not set" while `hermes auth list` shows it
-        # (#42130).
-        if not val and label == "openrouter":
-            try:
-                from agent.credential_pool import load_pool as _load_pool
-                if _load_pool("openrouter").has_credentials():
-                    display = "set (auth pool)"
-            except Exception:
-                pass
+        # `hermes auth add <provider>` and every OAuth login (Nous Portal, Codex, …) store the token in
+        # auth.json's credential_pool, not in an env var, so an env-only scan read those providers "not
+        # set" while they authenticated fine (#42130, #20675).
+        if not val and pooled & _pool_provider_ids(env_var, label):
+            display = "set (auth pool)"
         lines.append(f"  {label:<20} {display}")
     return lines
 
