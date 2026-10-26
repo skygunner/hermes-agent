@@ -256,6 +256,42 @@ class ManifestGate:
 
 IN_BOTH_LISTS = "listed in both plugins.enabled and plugins.disabled — disabled wins"
 
+# Directory sources only: entry-point plugins come from installed distributions, not from a dir sweep.
+_DIRECTORY_SOURCES = frozenset({"bundled", "user", "project"})
+
+
+def _directory_source_identity(manifests) -> dict[str, tuple[str, str, str]]:
+    """key -> (source, path, version) over a sweep's directory plugin sources: the inputs a user copy
+    dropped over a bundled key — or its removal — changes."""
+    return {manifest_key(m): (m.source, str(m.path), str(m.version or ""))
+            for m in manifests if m.source in _DIRECTORY_SOURCES}
+
+
+def _directory_sources_changed(manager) -> bool:
+    """Whether a plugin directory was added, removed or re-versioned since *manager*'s last sweep.
+    A manager that has not swept answers False: its own pending sweep reads the current dirs."""
+    if not getattr(manager, "_discovered", False):
+        return False
+    swept = _directory_source_identity(p.manifest for p in manager._plugins.values())
+    winners = resolve_manifest_winners(collect_directory_manifests())
+    return swept != _directory_source_identity(winners.values())
+
+
+def rediscover_plugins_if_sources_changed() -> None:
+    """``discover_plugins()`` that forces one sweep when this home's plugin directories changed since
+    the manager's last one, and otherwise loads normally (a no-op for an already-swept manager).
+
+    A profile served — or restarted — after a plugin directory appeared (a user copy shadowing a
+    bundled platform) or disappeared (that copy rolled back) must rebuild its adapters from what is
+    on disk now; a plain ``discover_plugins()`` returns early on the swept manager and keeps the
+    earlier platform registration (#144336). Unchanged directories keep the live registration: no
+    unload, no re-import. An in-place edit that keeps a plugin's key, path and version is not a
+    change here — enabling, disabling or reinstalling reloads explicitly through the gateway."""
+    from hermes_cli.plugins import discover_plugins, get_plugin_manager
+
+    manager = get_plugin_manager()
+    discover_plugins(force=_directory_sources_changed(manager))
+
 
 def plugins_in_both_lists() -> list[str]:
     """Keys of the plugins the loader skips because both lists name them, by the loader's own

@@ -1084,8 +1084,12 @@ class GatewayAdapterLifecycleMixin:
         await asyncio.to_thread(recover_left_core_in, profile_home, hydrate_secrets=False)
         with _profile_runtime_scope(profile_home, hydrate_secrets=False):
             profile_runtime_cfg = _load_gateway_config()
-            from hermes_cli.plugins import discover_plugins, get_plugin_manager
-            discover_plugins()
+            from hermes_cli.plugins import get_plugin_manager
+            from hermes_cli.plugins_discovery import rediscover_plugins_if_sources_changed
+            # A plugin directory added or removed since this profile's last sweep (a user copy shadowing
+            # a bundled platform, or its rollback) must reach the registry before the adapters are
+            # rebuilt; a plain discover_plugins() returns early on the already-swept manager (#144336).
+            rediscover_plugins_if_sources_changed()
             self._subscribe_plugin_rewire(get_plugin_manager(), profile_name, profile_home)
             # This profile's `hooks:` block: start() registered before any profile scope existed.
             self._register_config_hooks(
