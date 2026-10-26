@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from typing import Iterable, Optional
-from tools.mcp_tool_errors import _is_method_not_found_error, _unwrap_exception_group
+from tools.mcp_tool_errors import _is_method_not_found_error, _is_session_expired_error, _unwrap_exception_group
 from tools.mcp_tool_schema import mcp_prefixed_tool_name
 from tools.mcp_tool_common import _core
 from tools import mcp_tool_registration as _registration
@@ -129,6 +129,35 @@ class MCPServerHealthMixin:
             if registry.get_toolset_for_tool(tool_name) == f"mcp-{self.name}":
                 _registration._deregister_mcp_tool_all_scopes(self, tool_name)
 
+    async def _list_tools_for_refresh(self) -> Optional[list]:
+        """``tools/list`` for a dynamic refresh; ``None`` means skip (the reconnect republishes).
+
+        Snapshot the session only once the RPC lock is held: run() resets ``self.session`` to None on
+        every transport teardown (reconnect, backoff, park, cancel) outside both locks, so a refresh
+        queued behind the lock can wake up mid-restart (#109824). A ``tools/list_changed`` arriving in
+        that handover still snapshots a session that is not None but already closing, so ``list_tools``
+        raises ``Connection closed`` / ``ClosedResourceError`` against the transport being torn down
+        (#144491). That is transport loss, not a server fault: retry once against the session that
+        replaced it, or skip like the ``None`` case when the reconnect has not landed yet.
+        """
+        session = self.session
+        if session is None:
+            logger.debug("MCP server '%s': skipping dynamic tool refresh; session not connected", self.name)
+            return None
+        try:
+            return await _core._paginate_full_list(session.list_tools, "tools", self.name)
+        except Exception as exc:
+            if not _is_session_expired_error(exc):
+                raise
+            live_session = self.session
+            if live_session is None or live_session is session:
+                logger.debug("MCP server '%s': skipping dynamic tool refresh; session closed mid-refresh",
+                             self.name)
+                return None
+            logger.info("MCP server '%s': session was replaced mid-refresh; retrying against the live session",
+                        self.name)
+            return await _core._paginate_full_list(live_session.list_tools, "tools", self.name)
+
     async def _refresh_tools(self):
         """Re-fetch tools on ``tools/list_changed`` and update the registry. The lock serializes rapid-fire
         notifications; after the list_tools ``await`` all mutations are synchronous — atomic on the event loop."""
@@ -139,16 +168,9 @@ class MCPServerHealthMixin:
         async with self._refresh_lock:
             old_tool_names = set(self._registered_tool_names)
             async with self._rpc_lock:
-                # Snapshot the session only once the RPC lock is held: run() resets self.session
-                # to None on every transport teardown (reconnect, backoff, park, cancel) outside
-                # both locks, so a refresh queued behind the lock can wake up mid-restart
-                # (#109824). Skipping is correct — the reconnect's own discovery re-lists tools
-                # and the next tools/list_changed re-arms this refresh against the live session.
-                session = self.session
-                if session is None:
-                    logger.debug("MCP server '%s': skipping dynamic tool refresh; session not connected", self.name)
+                new_mcp_tools = await self._list_tools_for_refresh()
+                if new_mcp_tools is None:
                     return
-                new_mcp_tools = await _core._paginate_full_list(session.list_tools, "tools", self.name)
             # Remove only stale names first — no nuke-and-repave: live turns may hold tool-call
             # IDs pointing at existing handlers; in-place replacement avoids "not connected" races.
             self._deregister_owned(old_tool_names - {mcp_prefixed_tool_name(self.name, tool.name) for tool in new_mcp_tools})
