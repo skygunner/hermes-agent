@@ -426,6 +426,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.helpers import fence_state_after
+from gateway.platforms.base_auto_tts import synthesize_auto_tts
 from gateway.platforms.base_exec_approval import (
     approval_timeout_seconds, ea_action_labels, ea_default_reason_text, ea_header_text,
     ea_reason_label_text, ea_smart_deny_line_text, format_approval_deadline_line)
@@ -4117,29 +4118,6 @@ class BasePlatformAdapter(ABC):
         lo, hi = bounds
         return random.uniform(lo / 1000.0, hi / 1000.0)
 
-    async def _synthesize_auto_tts(self, text_content: str) -> tuple[list[str], Optional[str]]:
-        """Synthesize auto-TTS audio -> ``(existing_paths, requested_path)``; empty/None on failure
-        (logged, never raised). Path built platform-aware HERE: HERMES_SESSION_PLATFORM is cleared
-        post-handler."""
-        paths: list[str] = []
-        requested_path = None
-        try:
-            from tools.tts_tool import text_to_speech_tool, check_tts_requirements
-            if check_tts_requirements():
-                import json as _json
-                speech_text = self.prepare_tts_text(text_content)
-                if not speech_text:
-                    raise ValueError("Empty text after markdown cleanup")
-                requested_path = build_auto_tts_output_path(self.platform)
-                tts_data = _json.loads(await asyncio.to_thread(
-                    text_to_speech_tool, text=speech_text, output_path=requested_path))
-                if tts_data.get("success", True):
-                    raw_tts_paths = tts_data.get("file_paths") or [tts_data.get("file_path")]
-                    paths = [str(path) for path in raw_tts_paths if path and Path(path).exists()]
-        except Exception as tts_err:
-            logger.warning("[%s] Auto-TTS failed: %s", self.name, tts_err)
-        return paths, requested_path
-
     def _wants_auto_tts(self, event: MessageEvent, session_key: str, interrupt_event: asyncio.Event,
                         text_content: str, media_files: list) -> bool:
         """Auto-TTS on voice input (voice-first), gated by /voice or voice.auto_tts;
@@ -4523,7 +4501,8 @@ class BasePlatformAdapter(ABC):
                 _tts_paths, _tts_requested_path = [], None
                 if self._wants_auto_tts(
                         event, session_key, interrupt_event, text_content, media_files):
-                    _tts_paths, _tts_requested_path = await self._synthesize_auto_tts(text_content)
+                    _tts_paths, _tts_requested_path = await synthesize_auto_tts(
+                        self, text_content, event.source)
                 # TTS plays before text; generated files are removed afterwards.
                 _tts_caption_delivered = False
                 for _tts_index, _tts_path in enumerate(_tts_paths):

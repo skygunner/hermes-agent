@@ -430,8 +430,11 @@ class GatewayVoiceMixin:
             # Platforms whose native voice bubbles require Ogg/Opus (OPUS_VOICE_PLATFORMS) get an
             # explicit .ogg path; the TTS tool's container repair guarantees real Ogg/Opus bytes.
             audio_path = build_auto_tts_output_path(event.source.platform)
-            raw = await asyncio.to_thread(text_to_speech_tool, text=tts_text,
-                                          output_path=audio_path)
+            # Delivered after _run_agent's profile scope was reset; the provider reads profile-level
+            # env (GEMINI_BASE_URL) through get_secret, which fails closed while multiplexing.
+            async with self._async_profile_scope_for_source(event.source):
+                raw = await asyncio.to_thread(text_to_speech_tool, text=tts_text,
+                                              output_path=audio_path)
             try:
                 result = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
