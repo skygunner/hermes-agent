@@ -103,6 +103,13 @@ class GatewayUnavailableError(GatewayClientError):
         self.state = state
 
 
+class GatewayConnectError(GatewayClientError):
+    """The connect phase failed before anything was sent: the owner's ticket answer or its
+    websocket upgrade ran out of budget. A cold profile's activation runs on the owner's own loop,
+    the loop that answers both, so a burst of cold workers can delay either past its fixed budget.
+    Nothing was submitted, so a caller may retry it inside its own deadline."""
+
+
 class EventQueue(asyncio.Queue):
     """The client's bounded event queue plus an ordered overflow behind it: each ``get`` refills the
     queue from the overflow, so items arrive in read order and ``qsize``/``full`` see only the queue."""
@@ -258,7 +265,12 @@ def _session_ticket(home: Path, endpoint, *, purpose="interactive", scope=None, 
         "profile_id": endpoint.profile_id, "instance_id": endpoint.instance_id, "purpose": purpose,
         **({"scope": scope} if scope else {}), **({"subject": subject} if subject else {}),
     }}).encode() + b"\n"
-    grant = _identify_response(private_control_query(home, request))
+    try:
+        grant = _identify_response(private_control_query(home, request))
+    except (GatewayClientError, OSError) as exc:
+        # The peer is not answering this socket (5 s budget) while it activates profiles: no ticket
+        # was minted, so this is the connect phase, not a refusal of the claim.
+        raise GatewayConnectError(f"Gateway ticket request failed: {exc or type(exc).__name__}") from exc
     if any(grant.get(k) != v for k, v in {
         "profile_id": endpoint.profile_id, "instance_id": endpoint.instance_id, "runtime_protocol": 1,
     }.items()) or not isinstance(grant.get("ticket"), str) or not grant["ticket"]:
@@ -310,13 +322,18 @@ async def connect_gateway(endpoint=None, subject=None, *, max_size=8 * 1024 * 10
         # The gateway is a loopback (or explicitly named) peer, never something to route through the
         # user's HTTP(S) proxy; websockets>=14 reads HTTP_PROXY/HTTPS_PROXY by default and a proxy that
         # cannot reach 127.0.0.1 turns every launch into a 10 s open timeout.
-        async with connect(url, subprotocols=protocols, open_timeout=10, max_size=max_size,
-                           proxy=None) as ws:
-            if protocols and ws.subprotocol != GATEWAY_WS_PROTOCOL:
-                raise GatewayClientError("Gateway protocol mismatch; update/restart required")
-            async with GatewayClient(ws) as client:
-                yield client
-    except GatewayClientError:
-        raise
+        ws = await connect(url, subprotocols=protocols, open_timeout=10, max_size=max_size, proxy=None)
     except (OSError, TimeoutError) as exc:
+        # Nothing was sent yet: an owner still upgrading the socket can accept it a moment later.
+        raise GatewayConnectError("Gateway connection failed; no local fallback") from exc
+    try:
+        if protocols and ws.subprotocol != GATEWAY_WS_PROTOCOL:
+            raise GatewayClientError("Gateway protocol mismatch; update/restart required")
+        async with GatewayClient(ws) as client:
+            yield client
+    except (OSError, TimeoutError) as exc:
+        # Past the upgrade a request may already be with the owner, so this stays the ambiguous
+        # failure every caller reports and is never retried as a connect-phase one.
         raise GatewayClientError("Gateway connection failed; no local fallback") from exc
+    finally:
+        await ws.close()

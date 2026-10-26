@@ -16,7 +16,8 @@ import time
 # A worker the dispatcher spawns while `hermes update` drains the owner (or while the new owner is
 # still starting) waits for it instead of exiting: the condition is the host's, not the card's, and
 # a failed exit here spends the card's failure budget on an update window. Nothing is submitted
-# until an owner is ready, so waiting can never run the claim twice.
+# until an owner is ready, so waiting can never run the claim twice. The same deadline bounds a
+# retried connect phase (``GatewayConnectError``), where nothing was submitted either.
 OWNER_WAIT_S = 180.0
 _TRANSIENT_OWNER_STATES = frozenset({'draining', 'starting'})
 # Past the board lock wait: the owner's session setup and receipt before and after the write.
@@ -33,7 +34,8 @@ def admission_answer_budget():
 
 
 async def run(params, board_db):
-    from hermes_cli.gateway_client import connect_gateway, GatewayClientError, GatewayUnavailableError
+    from hermes_cli.gateway_client import (
+        connect_gateway, GatewayClientError, GatewayConnectError, GatewayUnavailableError)
     if os.environ.get('HERMES_TUI_GATEWAY_URL'):
         raise GatewayClientError('Kanban requires the assigned local profile owner')
     deadline = time.monotonic() + OWNER_WAIT_S
@@ -51,7 +53,13 @@ async def run(params, board_db):
         except GatewayUnavailableError as exc:
             if exc.state not in _TRANSIENT_OWNER_STATES or time.monotonic() >= deadline:
                 raise
-            await asyncio.sleep(1)
+        except GatewayConnectError:
+            # A cold profile's activation runs on the loop that answers the ticket (5 s) and the
+            # websocket upgrade (10 s), so a burst of cold workers can outlast either. Nothing was
+            # submitted: spend the wait retrying instead of booking a crash against the card.
+            if time.monotonic() >= deadline:
+                raise
+        await asyncio.sleep(1)
 
 
 async def _discard(events):
