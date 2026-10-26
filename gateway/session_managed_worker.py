@@ -274,8 +274,15 @@ class ManagedWorker:
             stopper.cancel()
             arrived.cancel()
 
-    def interrupt(self):
-        self.control({'type': 'stop'})
+    def interrupt(self, message=None, *, tool_reason=None):
+        # request_hard_interrupt passes a reason through the legacy interrupt ABI; a bare
+        # `def interrupt(self)` raises TypeError and the stop is lost before it reaches the worker.
+        frame = {'type': 'stop'}
+        if message is not None:
+            frame['message'] = message
+        if tool_reason is not None:
+            frame['tool_reason'] = tool_reason
+        self.control(frame)
 
     def respond(self, kind, prompt_id, value):
         self.control({'type': kind, 'prompt_id': prompt_id, 'value': value})

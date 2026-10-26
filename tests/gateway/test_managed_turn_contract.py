@@ -182,3 +182,17 @@ def test_shared_tool_events_bound_large_content_without_losing_error_or_path():
     assert complete['is_error'] is True
     assert 'error' in json.loads(complete['result'])
     assert len(json.dumps(complete)) < 100_000
+
+def test_hard_interrupt_reaches_the_managed_worker():
+    """Regression for #144068: ManagedWorker has no hard_interrupt, so request_hard_interrupt
+    falls back to the legacy interrupt ABI and must not raise TypeError on a reason-carrying stop."""
+    from agent.interrupt_compat import request_hard_interrupt
+    from gateway.session_managed_worker import ManagedWorker
+
+    worker = object.__new__(ManagedWorker)
+    frames = []
+    worker.control = frames.append
+    assert request_hard_interrupt(worker, 'stop because budget exhausted', tool_reason='budget')
+    assert frames[0]['type'] == 'stop'
+    assert frames[0]['message'] == 'stop because budget exhausted'
+    assert frames[0]['tool_reason'] == 'budget'
