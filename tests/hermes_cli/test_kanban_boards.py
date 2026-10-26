@@ -10,7 +10,8 @@ Covers the pieces added when boards became a first-class concept:
 * ``connect(board=)`` isolation — writes on one board don't leak.
 * ``create_board`` / ``list_boards`` / ``remove_board`` round trip.
 * CLI surface: ``hermes kanban boards list/create/switch/rm``.
-* ``_default_spawn`` injects ``HERMES_KANBAN_BOARD`` into worker env.
+* ``_default_spawn`` injects ``HERMES_KANBAN_BOARD`` into worker env, in and out of a
+  systemd unit (#144329).
 """
 
 from __future__ import annotations
@@ -281,7 +282,22 @@ class TestWorkerSpawnEnv:
     actually spawning anything.
     """
 
-    def test_default_spawn_sets_env_vars(self, fresh_home, monkeypatch):
+    @pytest.mark.parametrize(
+        "invocation_id", [None, "deadbeef"], ids=["no-unit", "systemd-unit"]
+    )
+    def test_default_spawn_sets_env_vars(self, fresh_home, monkeypatch, invocation_id):
+        # Regression for #144329: the spawn env must not depend on the unit pytest runs
+        # in — under INVOCATION_ID a real scope probe raises on the run-missing task.
+        from tools.process_registry import GatewayChildDispatch
+
+        if invocation_id is None:
+            monkeypatch.delenv("INVOCATION_ID", raising=False)
+        else:
+            monkeypatch.setenv("INVOCATION_ID", invocation_id)
+        monkeypatch.setattr(
+            "tools.process_registry.restart_safe_gateway_child_argv",
+            lambda command, **_: GatewayChildDispatch("in_process", command),
+        )
         captured = {}
 
         class FakeProc:
