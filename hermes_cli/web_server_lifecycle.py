@@ -538,15 +538,20 @@ def _uvicorn_console_logging() -> None:
     from uvicorn.logging import AccessFormatter, DefaultFormatter
 
     formats = LOGGING_CONFIG["formatters"]
-    for name, stream, formatter in (
-        ("uvicorn", sys.stderr, DefaultFormatter(formats["default"]["fmt"])),
-        ("uvicorn.access", sys.stdout, AccessFormatter(formats["access"]["fmt"])),
+    for name, stream, formatter_cls, fmt in (
+        ("uvicorn", sys.stderr, DefaultFormatter, formats["default"]["fmt"]),
+        ("uvicorn.access", sys.stdout, AccessFormatter, formats["access"]["fmt"]),
     ):
         logger = logging.getLogger(name)
         logger.propagate = False
+        # A console-less Python (pythonw, an NSSM service) sets sys.stdout/sys.stderr to None: no
+        # handler, and ``use_colors`` must come from the stream, not uvicorn's ``sys.stdout.isatty()``
+        # probe, which raises AttributeError on None and crash-loops the gateway (#144932).
+        if stream is None:
+            continue
         if not logger.handlers:  # a second listener in this process keeps the first one's
             handler = logging.StreamHandler(stream)
-            handler.setFormatter(formatter)
+            handler.setFormatter(formatter_cls(fmt, use_colors=stream.isatty()))
             logger.addHandler(handler)
     # LOGGING_CONFIG's level for the parent; uvicorn.Config sets only the child loggers' levels.
     logging.getLogger("uvicorn").setLevel(logging.INFO)

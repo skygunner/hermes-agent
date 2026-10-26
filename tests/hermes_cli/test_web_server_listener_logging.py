@@ -8,6 +8,7 @@ nothing binds.
 """
 
 import logging
+import sys
 
 import pytest
 
@@ -99,4 +100,28 @@ def test_listener_config_keeps_uvicorn_on_the_console_and_out_of_the_hermes_logs
     assert "/access-line" not in out + err
     agent_log = (root / "logs" / "agent.log").read_text(encoding="utf-8-sig")
     assert "hermes-file-warning" in agent_log
+    assert "uvicorn-console-warning" not in agent_log and "/access-line" not in agent_log
+
+
+def test_listener_builds_and_logs_without_a_console(tmp_path, monkeypatch):
+    """A console-less interpreter (pythonw, an NSSM service) sets ``sys.stdout`` and ``sys.stderr``
+    to None. Building a listener then crash-looped the gateway, and a handler bound to a None
+    stream would fail on its first emit (#144932)."""
+    root = tmp_path / "root"
+    hermes_logging.setup_logging(hermes_home=root, mode="gateway", force=True)
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    _gateway_listener(monkeypatch)
+    _dashboard_listener(monkeypatch)
+
+    logging.getLogger("uvicorn.error").warning("uvicorn-console-warning")
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d', "127.0.0.1:50000", "GET", "/access-line", "1.1", 200)
+    hermes_logging.flush_log_queue()
+
+    for name in ("uvicorn", "uvicorn.access"):
+        assert logging.getLogger(name).propagate is False  # still out of the Hermes log files
+        assert all(handler.stream is not None for handler in logging.getLogger(name).handlers)
+    agent_log = (root / "logs" / "agent.log").read_text(encoding="utf-8-sig")
     assert "uvicorn-console-warning" not in agent_log and "/access-line" not in agent_log
