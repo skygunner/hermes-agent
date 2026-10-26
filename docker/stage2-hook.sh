@@ -172,15 +172,16 @@ for sock in /var/run/docker.sock /run/docker.sock; do
 done
 
 # --- Fix ownership of data volume ---
-# When HERMES_UID is remapped or the top-level $HERMES_HOME isn't owned by
-# the runtime hermes UID, restore ownership to hermes — but ONLY for the
-# directories hermes actually writes to. The full $HERMES_HOME may be a
+# When HERMES_UID/HERMES_GID are remapped or a hermes-owned tree isn't owned
+# by the runtime hermes UID:GID, restore ownership to hermes — but ONLY for
+# the directories hermes actually writes to. The full $HERMES_HOME may be a
 # host-mounted bind containing unrelated user files; `chown -R` would
 # silently destroy host ownership of those (see issue #19788).
 #
 # The canonical list of hermes-owned subdirs is the same one the s6-setuidgid
 # mkdir -p block below seeds. Keep them in sync if the seed list changes.
 actual_hermes_uid=$(id -u hermes)
+actual_hermes_gid=$(id -g hermes)
 
 path_has_symlink_component() {
     path="$1"
@@ -226,11 +227,11 @@ tree_has_non_hermes_owner() {
 }
 
 needs_chown=false
-if [ "$(stat -c %u "$HERMES_HOME" 2>/dev/null)" != "$actual_hermes_uid" ]; then
+if [ "$(stat -c '%u:%g' "$HERMES_HOME" 2>/dev/null)" != "$actual_hermes_uid:$actual_hermes_gid" ]; then
     needs_chown=true
 fi
 if [ "$needs_chown" = true ]; then
-    echo "[stage2] Fixing ownership of $HERMES_HOME (targeted) to hermes ($actual_hermes_uid)"
+    echo "[stage2] Fixing ownership of $HERMES_HOME (targeted) to hermes ($actual_hermes_uid:$actual_hermes_gid)"
     # In rootless Podman the container's "root" is mapped to an
     # unprivileged host UID — chown will fail. That's fine: the volume
     # is already owned by the mapped user on the host side.
@@ -244,15 +245,22 @@ if [ "$needs_chown" = true ]; then
         chown hermes:hermes "$HERMES_HOME" 2>/dev/null || \
             echo "[stage2] Warning: chown $HERMES_HOME failed (rootless container?) — continuing"
     fi
-    # Hermes-owned subdirs: recursive chown is safe here because these are
-    # created and managed exclusively by hermes (see the s6-setuidgid mkdir
-    # -p block below for the canonical list).
-    for sub in cron sessions logs hooks memories skills skins plans workspace home profiles pairing platforms/pairing; do
-        if [ -e "$HERMES_HOME/$sub" ] && tree_has_non_hermes_owner "$HERMES_HOME/$sub"; then
-            chown_hermes_tree "$HERMES_HOME/$sub"
-        fi
-    done
 fi
+
+# Hermes-owned subdirs: each one is probed on its own instead of gating the
+# repair on the top-level $HERMES_HOME. `usermod -u` re-owns the home
+# directory itself and `groupmod` re-owns nothing, so a top-level check
+# leaves stale GIDs and root-owned subtrees behind after a remap (#41699).
+# A subtree is still only walked when its own probe finds a non-hermes
+# owner, so correctly owned volumes are not rescanned (#62208). Recursive
+# chown is safe here because hermes creates and manages these exclusively
+# (see the s6-setuidgid mkdir -p block below for the canonical list).
+# profiles/, cron/ and pairing/ have their own unconditional blocks below.
+for sub in sessions logs hooks memories skills skins plans workspace home; do
+    if [ -e "$HERMES_HOME/$sub" ] && tree_has_non_hermes_owner "$HERMES_HOME/$sub"; then
+        chown_hermes_tree "$HERMES_HOME/$sub"
+    fi
+done
 
 # --- Immutable install tree ---
 # Do not chown runtime code or dependency trees under $INSTALL_DIR back to the
@@ -287,11 +295,12 @@ fi
 
 # Always ensure logs/gateways is hermes-owned (#45258). Formerly healed by
 # restartable gateway log/run chown — removed due to symlink TOCTOU
-# (CWE-59/367). The targeted data-volume chown above only runs when the
-# top-level $HERMES_HOME is mis-owned, so a warm volume with hermes-owned
-# HERMES_HOME but root-owned logs/gateways would otherwise leave
-# s6-setuidgid hermes mkdir failing with Permission denied. Non-recursive:
-# profile leaf dirs are each created/owned by their own log/run as hermes.
+# (CWE-59/367). The recursive repair above skips a logs/ tree whose probe
+# finds no non-hermes owner, so keep a warm volume's gateway dir repaired
+# with one chown instead of a walk: a root-owned logs/gateways would
+# otherwise leave s6-setuidgid hermes mkdir failing with Permission denied.
+# Non-recursive: gateway log leaf dirs are created/owned by their own
+# log/run as hermes.
 if [ -d "$HERMES_HOME/logs/gateways" ]; then
     if refuse_symlinked_path "chown" "$HERMES_HOME/logs/gateways"; then
         :
