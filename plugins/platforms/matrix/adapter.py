@@ -13,7 +13,7 @@ Env vars (config.yaml ``matrix:`` keys alias several — env wins):
   MATRIX_AUTO_THREAD (default true), MATRIX_DM_AUTO_THREAD, MATRIX_DM_MENTION_THREADS,
   MATRIX_SESSION_SCOPE auto|room|thread; MATRIX_MAX_MESSAGE_LENGTH (UTF-8 bytes, default/max 15000),
   MATRIX_MAX_MEDIA_BYTES, MATRIX_ROOM_IDENTITY_TTL_SECONDS; MATRIX_APPROVAL_REQUIRE_SENDER (default
-  true), MATRIX_APPROVAL_TIMEOUT_SECONDS (default 300).
+  true), MATRIX_APPROVAL_TIMEOUT_SECONDS (default: ``approvals.timeout``).
 
 Note: any room with <=2 joined members is auto-classified as a DM (see
 ``_resolve_room_identity``), regardless of ``m.direct`` account data or an explicit room name —
@@ -77,6 +77,7 @@ from gateway.platforms.base import (
     SendResult, resolve_proxy_url, proxy_kwargs_for_aiohttp, ssrf_redirect_guard,
 )
 from gateway.platforms.base import transcode_to_ogg_opus
+from gateway.platforms.base_exec_approval import approval_timeout_seconds
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.platforms.helpers import ThreadParticipationTracker
 from plugins.platforms.matrix.voice_mention import ParkedVoices, VoiceGate, has_voice_marker, is_voice_event
@@ -889,7 +890,6 @@ class MatrixAdapter(BasePlatformAdapter):
         self._approval_prompts_by_event: dict[str, _MatrixApprovalPrompt] = {}
         self._approval_prompt_by_session: dict[str, str] = {}
         self._approval_require_sender: bool = _env_truthy("MATRIX_APPROVAL_REQUIRE_SENDER", "true")
-        self._approval_timeout_seconds = _env_number("MATRIX_APPROVAL_TIMEOUT_SECONDS", 300, int)
         self._model_picker_prompts_by_event: dict[str, _MatrixPickerPrompt] = {}
         self._choice_picker_prompts_by_event: dict[str, _MatrixPickerPrompt] = {}
         # Authz lists: scoped env → this profile's YAML (``allowed_users`` / ``ignore_user_patterns``,
@@ -1645,6 +1645,13 @@ class MatrixAdapter(BasePlatformAdapter):
     @property
     def _EA_HEADER(self) -> str:
         return f"⚠️ **{t('gateway.exec_approval.header')}**\n"
+
+    @property
+    def _approval_timeout_seconds(self) -> int:
+        """Reaction-prompt lifetime: MATRIX_APPROVAL_TIMEOUT_SECONDS when set, else
+        ``approvals.timeout`` — the reader the parked turn waits on, so the card cannot die while
+        the turn is still waiting (and follows a config change without a gateway recycle)."""
+        return _env_number("MATRIX_APPROVAL_TIMEOUT_SECONDS", approval_timeout_seconds(), int)
 
     async def _send_reaction_prompt(
         self, chat_id: str, text: str, metadata: Optional[dict], make_prompt, registry: dict, emojis,
