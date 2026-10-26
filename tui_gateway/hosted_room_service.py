@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import threading
 import time
@@ -26,6 +27,8 @@ from tui_gateway.hosted_room_peer_http import (
     PeerRunsHTTPClient, PeerRunsHTTPError, digest_reauthorization_error)
 from tui_gateway.hosted_room_peer_transport import (
     HostedRoomPeerClient, PeerHostedRoomTransport, PeerMemberRoute, build_member_dispatch)
+
+logger = logging.getLogger(__name__)
 
 _HOSTED_ROOM_IDLE_FALLBACK_SECONDS = 5.0
 _HOSTED_ROOM_ACTIVE_POLL_SECONDS = 0.25
@@ -501,14 +504,19 @@ class HostedRoomService:
     def send(self, *, room_id: str, event_id: str, payload: Any) -> dict[str, Any]:
         normalized = discussion.validate_user_payload(payload)
         gateway_id, epoch = self._owned_authority(room_id)
+        binding = next((b for b in self.bindings() if b.room_id == room_id), None)
+        if binding is None:
+            raise hosted_rooms.RoomNotFoundError("hosted room not found")
         from gateway.session_hosted_attachments import append_user_event
         event = append_user_event(
             self, room_id=room_id, event_id=event_id, payload=normalized,
             gateway_id=gateway_id, epoch=epoch)
-        binding = next((b for b in self.bindings() if b.room_id == room_id), None)
-        if binding is None:
-            raise hosted_rooms.RoomNotFoundError("hosted room not found")
-        self.prepare_room(binding)
+        try:
+            self.prepare_room(binding)
+        except Exception:
+            # The message is committed, so the Send succeeded: report the failed preparation
+            # here and let the driver's next pass retry it instead of failing a stored Send.
+            logger.exception("hosted room %s: preparation after a stored send failed", room_id)
         self.runtime.wakeup()
         return event
 
