@@ -270,7 +270,7 @@ def _session_ticket(home: Path, endpoint, *, purpose="interactive", scope=None, 
     except (GatewayClientError, OSError) as exc:
         # The peer is not answering this socket (5 s budget) while it activates profiles: no ticket
         # was minted, so this is the connect phase, not a refusal of the claim.
-        raise GatewayConnectError(f"Gateway ticket request failed: {exc or type(exc).__name__}") from exc
+        raise GatewayConnectError(f"Gateway ticket request failed: {exc}") from exc
     if any(grant.get(k) != v for k, v in {
         "profile_id": endpoint.profile_id, "instance_id": endpoint.instance_id, "runtime_protocol": 1,
     }.items()) or not isinstance(grant.get("ticket"), str) or not grant["ticket"]:
