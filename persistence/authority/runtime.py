@@ -137,8 +137,10 @@ class ModelPick(_Command):
     provider: str | None = None
     confirm: str | None = None
     reasoning: str | None = None
+    # ``global``: the picker's ``--global`` (^g) — the pick also becomes the profile's default.
+    scope: str | None = None
     operation: ClassVar[str] = "model"
-    _keys: ClassVar[tuple[str, ...]] = ("model", "provider", "confirm", "reasoning")
+    _keys: ClassVar[tuple[str, ...]] = ("model", "provider", "confirm", "reasoning", "scope")
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,7 +292,12 @@ def _editor_fingerprint(value: Any) -> str | None:
 
 
 def _parse_model(operation: str, payload: dict[str, Any]) -> MutationCommand | None:
-    if "model" in payload and not set(payload) - {"model", "provider", "confirm", "reasoning"} and all(isinstance(v, str) and v.strip() for v in payload.values()):
+    # ``scope``: ``global`` is ``--global`` (the picker's ^g toggle): the pick also becomes the profile's
+    # default. A session pick omits it, so a session receipt's identity is unchanged.
+    if ("model" in payload
+            and not set(payload) - {"model", "provider", "confirm", "reasoning", "scope"}
+            and all(isinstance(v, str) and v.strip() for v in payload.values())
+            and payload.get("scope", "session") in ("session", "global")):
         if "reasoning" not in payload or _reasoning_level(payload["reasoning"]):
             return ModelPick(**payload)
     return None
