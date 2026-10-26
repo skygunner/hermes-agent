@@ -124,10 +124,12 @@ def _run_async(coro):
     return asyncio.run(coro)
 
 
-def _resolve_cdp_endpoint() -> str:
-    """Normalized CDP WebSocket URL via ``browser_session_cdp.get_cdp_override``, or ""."""
-    from tools.browser_session_cdp import get_cdp_override
-    return (get_cdp_override() or "").strip()
+def _resolve_cdp_endpoint() -> tuple[str, str]:
+    """``(normalized CDP WebSocket URL, discovery error)``: the endpoint, plus the reason a configured
+    discovery root could not be resolved to one ("" when it resolved or needed no discovery)."""
+    from tools.browser_session_cdp import get_cdp_override_raw, resolve_cdp_override_detailed
+    raw = get_cdp_override_raw()
+    return resolve_cdp_override_detailed(raw) if raw else ("", "")
 
 
 def _blocked(message: str, method: str) -> str:
@@ -329,7 +331,7 @@ def browser_cdp(method: str, params: Optional[dict[str, Any]] = None, target_id:
     if frame_id:
         # An OOPIF's frame id is its iframe target id, so the guard judges that frame (or fails closed).
         blocked = _browser_cdp_private_guard(method=method, params=params or {}, target_id=frame_id,
-                                             endpoint=_resolve_cdp_endpoint() if _WS_AVAILABLE else "")
+                                             endpoint=_resolve_cdp_endpoint()[0] if _WS_AVAILABLE else "")
         if blocked:
             return blocked
         return _browser_cdp_via_supervisor(task_id=effective_task_id, frame_id=frame_id, method=method,
@@ -340,14 +342,17 @@ def browser_cdp(method: str, params: Optional[dict[str, Any]] = None, target_id:
     if not _WS_AVAILABLE:
         return tool_error("The 'websockets' Python package is required but not installed. "
                           "Run: hermes pm repair")
-    endpoint = _resolve_cdp_endpoint()
+    endpoint, discovery_error = _resolve_cdp_endpoint()
     if not endpoint:
         return tool_error("No CDP endpoint is available. Run '/browser connect' to attach to a running Chrome, "
                           "Brave, Chromium, or Edge browser, or set 'browser.cdp_url' in config.yaml.", cdp_docs=CDP_DOCS_URL)
     if not endpoint.startswith(("ws://", "wss://")):
-        return tool_error(f"CDP endpoint is not a WebSocket URL: {endpoint!r}. Expected ws://... or wss://... — "
-                          "the /browser connect resolver should have rewritten this. Check that a Chromium-family "
-                          "browser is actually listening on the debug port.")
+        from agent.redact import redact_cdp_url
+        return tool_error(f"CDP discovery at {redact_cdp_url(endpoint)} did not return a WebSocket URL: "
+                          f"{discovery_error or 'no webSocketDebuggerUrl'}. The debug port is unreachable or not "
+                          "answering /json/version — a reachability problem, often transient, so retry this call "
+                          "before changing any configuration. If it persists, check that a Chromium-family browser "
+                          "is actually listening on the debug port.", cdp_docs=CDP_DOCS_URL)
     call_params: dict[str, Any] = params or {}
     if not isinstance(call_params, dict):
         return tool_error(f"'params' must be an object/dict, got {type(call_params).__name__}")

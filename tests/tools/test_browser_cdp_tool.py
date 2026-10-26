@@ -138,7 +138,7 @@ def cdp_server(monkeypatch):
     server = _CDPServer()
     ws_url = server.start()
     monkeypatch.setattr(
-        browser_cdp_tool, "_resolve_cdp_endpoint", lambda: ws_url
+        browser_cdp_tool, "_resolve_cdp_endpoint", lambda: (ws_url, "")
     )
     try:
         yield server
@@ -166,11 +166,32 @@ def test_missing_method_returns_error():
 
 
 def test_no_endpoint_returns_helpful_error(monkeypatch):
-    monkeypatch.setattr(browser_cdp_tool, "_resolve_cdp_endpoint", lambda: "")
+    monkeypatch.setattr(browser_cdp_tool, "_resolve_cdp_endpoint", lambda: ("", ""))
     result = json.loads(browser_cdp_tool.browser_cdp(method="Target.getTargets"))
     assert "error" in result
     assert "/browser connect" in result["error"]
     assert result.get("cdp_docs") == browser_cdp_tool.CDP_DOCS_URL
+
+
+def test_discovery_failure_surfaces_its_reason(monkeypatch):
+    """Regression for #143418: a transient ``/json/version`` failure must be reported as the reachability
+    problem it is — with its cause and a retry hint — not as a configuration-looking
+    ``CDP endpoint is not a WebSocket URL`` error that makes the model abandon the tool."""
+    monkeypatch.setenv("BROWSER_CDP_URL", "http://cdp.example:9223")
+    monkeypatch.setattr(browser_session_cdp, "live_cdp_override", lambda: "")
+
+    def _boom(*args, **kwargs):
+        raise requests.exceptions.ConnectTimeout("timed out")
+
+    monkeypatch.setattr(requests, "get", _boom)
+
+    result = json.loads(browser_cdp_tool.browser_cdp(method="Target.getTargets"))
+
+    assert "error" in result
+    error = result["error"]
+    assert "timed out" in error, "the discovery failure itself must reach the model"
+    assert "transient" in error, "a transient failure must be named as retryable"
+    assert "not a WebSocket URL" not in error
 
 
 def test_websockets_missing_returns_error(monkeypatch):
@@ -451,7 +472,7 @@ def test_runtime_evaluate_blocked_when_current_page_is_private(monkeypatch):
     monkeypatch.setattr(
         browser_cdp_tool,
         "_resolve_cdp_endpoint",
-        lambda: "ws://127.0.0.1:9222/devtools/browser/mock",
+        lambda: ("ws://127.0.0.1:9222/devtools/browser/mock", ""),
     )
 
 
@@ -546,7 +567,7 @@ def test_page_navigate_to_private_url_blocked_before_cdp(monkeypatch):
     monkeypatch.setattr(
         browser_cdp_tool,
         "_resolve_cdp_endpoint",
-        lambda: "ws://127.0.0.1:9222/devtools/browser/mock",
+        lambda: ("ws://127.0.0.1:9222/devtools/browser/mock", ""),
     )
 
 

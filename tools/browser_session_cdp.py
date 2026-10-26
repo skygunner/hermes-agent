@@ -27,16 +27,23 @@ def resolve_cdp_override(cdp_url: str) -> str:
     Full ``ws://.../devtools/browser/...`` endpoints pass through; HTTP discovery roots and bare
     ``ws://host:port`` resolve via ``/json/version`` → ``webSocketDebuggerUrl`` (falls back to the raw value).
     """
+    return resolve_cdp_override_detailed(cdp_url)[0]
+
+
+def resolve_cdp_override_detailed(cdp_url: str) -> tuple[str, str]:
+    """``(endpoint, discovery_error)``: ``resolve_cdp_override`` plus the redacted ``/json/version`` failure
+    when the raw value was kept. A caller that only sees the endpoint reports a transient timeout as a
+    configuration problem otherwise."""
     raw = (cdp_url or "").strip()
     if not raw:
-        return ""
+        return "", ""
     lowered = raw.lower()
     if "/devtools/browser/" in lowered:
-        return raw
+        return raw, ""
     discovery_url = raw
     if lowered.startswith(("ws://", "wss://")):
         if not (raw.count(":") == 2 and raw.rstrip("/").rsplit(":", 1)[-1].isdigit() and "/" not in raw.split(":", 2)[-1]):
-            return raw
+            return raw, ""
         discovery_url = ("http://" if lowered.startswith("ws://") else "https://") + raw.split("://", 1)[1]
     version_url = discovery_url if discovery_url.lower().endswith("/json/version") else discovery_url.rstrip("/") + "/json/version"
     try:
@@ -45,16 +52,17 @@ def resolve_cdp_override(cdp_url: str) -> str:
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:  # health: allow BLE001 -- any discovery failure falls back to the raw endpoint
+        reason = f"{type(exc).__name__}: {redact_cdp_url(str(exc))}"
         logger.warning("Failed to resolve CDP endpoint %s via %s: %s", redact_cdp_url(raw),
-                       redact_cdp_url(version_url), redact_cdp_url(str(exc)))
-        return raw
+                       redact_cdp_url(version_url), reason)
+        return raw, reason
     ws_url = str(payload.get("webSocketDebuggerUrl") or "").strip()
     if ws_url:
         logger.info("Resolved CDP endpoint %s -> %s", redact_cdp_url(raw), redact_cdp_url(ws_url))
-        return ws_url
+        return ws_url, ""
     logger.warning("CDP discovery at %s did not return webSocketDebuggerUrl; using raw endpoint",
                    redact_cdp_url(version_url))
-    return raw
+    return raw, f"no webSocketDebuggerUrl in the response from {redact_cdp_url(version_url)}"
 
 
 def live_cdp_override() -> str:
