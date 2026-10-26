@@ -385,7 +385,7 @@ async def _start_gateway_start_control_socket(runner):
 def _start_gateway_start_cron_and_housekeeping(runner):
     """Start the cron scheduler thread + gateway housekeeping thread; returns
     ``(cron_stop, cron_provider, cron_thread, housekeeping_thread)``."""
-    from gateway.run import (Dict, Platform, _cron_profile_gate, _cron_tick_profile_homes, _start_gateway_housekeeping, asyncio, logger, threading)
+    from gateway.run import (Dict, Platform, _best_effort, _cron_profile_gate, _cron_tick_profile_homes, _start_gateway_housekeeping, asyncio, logger, threading)
     # The event loop is passed so cron delivery can use live adapters (E2EE support).
     from cron.scheduler_provider import (
         InProcessCronScheduler, resolve_cron_scheduler, scheduler_for_profile_mode)
@@ -460,6 +460,11 @@ def _start_gateway_start_cron_and_housekeeping(runner):
                 "cron_provider": cron_provider, "runner": runner, "cron_thread": cron_thread},
         daemon=True, name="gateway-housekeeping")
     process_ownership.start_writer(housekeeping_thread)
+    # The orphan reap must not wait for the first browser request: a gateway that never serves one still
+    # inherits the Chromium tree of a force-killed predecessor (#145010). The janitor's cycle 0 reaps, then
+    # repeats every BROWSER_ORPHAN_REAP_INTERVAL; it is idempotent, so a browser-using gateway keeps one.
+    from tools.browser_session_lifecycle import start_cleanup_thread
+    _best_effort(start_cleanup_thread, "Browser orphan reaper did not start: %s")
     return cron_stop, cron_provider, cron_thread, housekeeping_thread
 
 
