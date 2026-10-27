@@ -1247,7 +1247,7 @@ class TestInferenceProfileContextLength:
 
     def setup_method(self):
         from agent import bedrock_adapter
-        bedrock_adapter._inference_profile_model_cache.clear()
+        bedrock_adapter.reset_client_cache()
 
     def test_arn_resolves_wrapped_model_window_in_the_arn_region(self):
         # No region passed (agent/model_metadata.py::_resolve_bedrock_context_length passes none) and
@@ -1274,8 +1274,11 @@ class TestInferenceProfileContextLength:
                 caplog.at_level("WARNING", logger="agent.bedrock_adapter"):
             assert get_bedrock_context_length(self.ARN, probe=False) == BEDROCK_DEFAULT_CONTEXT_LENGTH
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
-        assert len(warnings) == 1 and self.ARN in warnings[0].getMessage()
-        assert "GetInferenceProfile" in warnings[0].getMessage()
+        # The failure warning from _resolve_inference_profile_model_id (#142404) is separate; this is the
+        # default-window warning: one record, naming the profile and the escape hatch.
+        fallback = [r for r in warnings if "resolved no known model window" in r.getMessage()]
+        assert len(fallback) == 1 and self.ARN in fallback[0].getMessage()
+        assert "GetInferenceProfile" in fallback[0].getMessage()
 
     def test_profile_wrapping_claude_keeps_prompt_cache_markers(self):
         # build_converse_kwargs gates cachePoint on the model id; the opaque profile ARN must be
@@ -1289,6 +1292,73 @@ class TestInferenceProfileContextLength:
             kwargs = build_converse_kwargs(model=self.ARN, messages=messages)
         assert kwargs["modelId"] == self.ARN  # the request still targets the profile
         assert kwargs["system"][-1] == {"cachePoint": {"type": "default"}}
+
+
+class TestInferenceProfileLookupRetry:
+    """Regression for #142404: one failed GetInferenceProfile lookup (an expired SSO token at process
+    start, or the permission missing) used to be cached as the profile ARN for the life of the
+    process, so the profile never resolved, the 128k default window applied forever and every turn
+    was billed as uncached input. A failure must never be cached for good — it is retried — and
+    prompt caching must fail open while the profile is unresolved."""
+
+    ARN = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abcdef123456"
+    WRAPPED = "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-8"
+
+    def setup_method(self):
+        from agent import bedrock_adapter
+        bedrock_adapter.reset_client_cache()
+
+    def _client(self, *results):
+        client = MagicMock()
+        client.get_inference_profile.side_effect = results
+        return client
+
+    def test_failed_lookup_is_retried_then_the_success_is_cached(self, caplog):
+        # Expired SSO token at startup, `aws sso login` mid-process: the first resolution must not
+        # decide the rest of the process's life. Backoff keeps the retry from hammering the control
+        # plane on every context-length resolution.
+        from agent import bedrock_adapter
+        from agent.bedrock_adapter import BEDROCK_DEFAULT_CONTEXT_LENGTH, get_bedrock_context_length
+        client = self._client(Exception("ExpiredTokenException"), {"models": [{"modelArn": self.WRAPPED}]})
+        clock = MagicMock()
+        clock.monotonic.return_value = 1000.0
+        with patch("agent.bedrock_adapter._get_bedrock_control_client", return_value=client), \
+                patch("agent.bedrock_adapter.time", clock), \
+                caplog.at_level("WARNING", logger="agent.bedrock_adapter"):
+            assert get_bedrock_context_length(self.ARN, probe=False) == BEDROCK_DEFAULT_CONTEXT_LENGTH
+            for _ in range(3):  # inside the backoff: no further control-plane call, window unchanged
+                assert get_bedrock_context_length(self.ARN, probe=False) == BEDROCK_DEFAULT_CONTEXT_LENGTH
+            assert client.get_inference_profile.call_count == 1
+            # 60s backoff elapsed: the lookup is retried, now succeeds, and the result is cached.
+            clock.monotonic.return_value = 1061.0
+            assert get_bedrock_context_length(self.ARN, probe=False) == 1_000_000
+            assert get_bedrock_context_length(self.ARN, probe=False) == 1_000_000
+        assert client.get_inference_profile.call_count == 2
+        messages = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(self.ARN in m and "GetInferenceProfile" in m for m in messages)   # the failure
+        assert any(self.WRAPPED in m for m in messages)                              # the recovery
+
+    def test_unresolved_profile_keeps_cache_points_instead_of_dropping_them(self):
+        # A model that refuses cachePoint costs one call (recover_from_cache_point_rejection strips,
+        # retries and remembers); a missing marker costs full input price on every turn.
+        from agent.bedrock_adapter import _model_supports_prompt_cache, build_converse_kwargs
+        client = self._client(Exception("AccessDeniedException"))
+        messages = [{"role": "system", "content": "Be helpful."}, {"role": "user", "content": "Hi"}]
+        with patch("agent.bedrock_adapter._get_bedrock_control_client", return_value=client):
+            assert _model_supports_prompt_cache(self.ARN) is True
+            kwargs = build_converse_kwargs(model=self.ARN, messages=messages)
+        assert kwargs["modelId"] == self.ARN  # the request still targets the profile
+        assert kwargs["system"][-1] == {"cachePoint": {"type": "default"}}
+
+    def test_resolved_profile_still_matches_the_wrapped_model(self):
+        # The fail-open arm must not swallow the real match: a resolved profile sizes and caches by
+        # the model it wraps.
+        from agent.bedrock_adapter import _model_supports_prompt_cache, get_bedrock_context_length
+        client = self._client({"models": [{"modelArn": self.WRAPPED}]})
+        with patch("agent.bedrock_adapter._get_bedrock_control_client", return_value=client):
+            assert _model_supports_prompt_cache(self.ARN) is True
+            assert get_bedrock_context_length(self.ARN, probe=False) == 1_000_000
+        assert client.get_inference_profile.call_count == 1  # cached, one lookup per process
 
 
 class TestBedrockContextProbe:

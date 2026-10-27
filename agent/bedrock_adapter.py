@@ -157,6 +157,7 @@ def reset_client_cache():
     _bedrock_control_client_cache.clear()
     _bedrock_clients_by_home.clear()
     _inference_profile_model_cache.clear()
+    _inference_profile_retry_at.clear()
     _DEFAULT_WINDOW_WARNED.clear()
 
 
@@ -505,7 +506,10 @@ def _model_supports_tool_use(model_id: str) -> bool:
 def _model_supports_prompt_cache(model_id: str) -> bool:
     # An application-inference-profile ARN names no model: match on the wrapped model (cached lookup).
     if _APPLICATION_PROFILE_ARN_RE.search(model_id):
-        model_id = _resolve_inference_profile_model_id(model_id)
+        resolved = _resolve_inference_profile_model_id(model_id)
+        if resolved == model_id:
+            return True  # Let Bedrock reject unsupported cache points through the existing retry path.
+        model_id = resolved
     return any(pattern in model_id.lower() for pattern in _CACHE_POINT_PATTERNS)
 
 
@@ -1540,23 +1544,34 @@ def get_bedrock_context_length(model_id: str, region: str = "", probe: bool = Tr
 _APPLICATION_PROFILE_ARN_RE = re.compile(r":application-inference-profile/")
 _ARN_REGION_RE = re.compile(r"^arn:[^:]+:bedrock:([a-z0-9-]+):", re.IGNORECASE)
 _inference_profile_model_cache: dict[str, str] = {}
+_inference_profile_retry_at: dict[str, float] = {}
+_INFERENCE_PROFILE_RETRY_SECONDS = 60.0
 
 
 def _resolve_inference_profile_model_id(profile_arn: str, region: str = "") -> str:
-    """Application-profile ARN → the wrapped model's ARN (its ``foundation-model/<id>`` tail satisfies the
-    static-table substring match); the profile ARN itself when ``bedrock:GetInferenceProfile`` is not
-    granted or unavailable, so callers keep the default-window behaviour. Both outcomes are cached per
-    process: this runs on every context-length resolution, not once per model."""
+    """Resolve the wrapped model, caching successes and retrying failures after a backoff."""
     if profile_arn in _inference_profile_model_cache:
         return _inference_profile_model_cache[profile_arn]
+    failed_before = profile_arn in _inference_profile_retry_at
+    if failed_before and time.monotonic() < _inference_profile_retry_at[profile_arn]:
+        return profile_arn
     arn_region = _ARN_REGION_RE.match(profile_arn)
     region = (arn_region.group(1) if arn_region else "") or region or resolve_bedrock_region()
-    resolved = profile_arn
     try:
         client = _get_bedrock_control_client(region)
         models = client.get_inference_profile(inferenceProfileIdentifier=profile_arn).get("models") or []
-        resolved = next((m["modelArn"] for m in models if m.get("modelArn")), profile_arn)
+        resolved = next((m["modelArn"] for m in models if m.get("modelArn")), None)
     except Exception as exc:  # no boto3 / credentials / GetInferenceProfile not granted
         logger.debug("Inference profile resolution skipped for %s: %s", profile_arn, exc)
+        resolved = None
+    if not resolved:
+        if not failed_before:
+            logger.warning("Bedrock GetInferenceProfile failed for %s; retrying in %.0f seconds.",
+                           profile_arn, _INFERENCE_PROFILE_RETRY_SECONDS)
+        _inference_profile_retry_at[profile_arn] = time.monotonic() + _INFERENCE_PROFILE_RETRY_SECONDS
+        return profile_arn
+    if failed_before:
+        logger.warning("Bedrock inference profile %s now resolves to %s.", profile_arn, resolved)
+        _inference_profile_retry_at.pop(profile_arn)
     _inference_profile_model_cache[profile_arn] = resolved
     return resolved
