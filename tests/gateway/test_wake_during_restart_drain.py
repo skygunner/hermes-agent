@@ -156,7 +156,31 @@ async def test_wake_is_refused_when_drain_starts_after_the_busy_handler_queued_i
     with pytest.raises(WakeNotAccepted) as refused:
         await deliver_wake(adapter, text="[kanban] Task t_1 completed.", source=source)
     assert "during admission" in str(refused.value)  # the post-admission re-check fired
+    assert key not in adapter._pending_messages  # refused wake: not spooled at shutdown, not re-appended at startup (#145049)
     event, text = await runner._run_agent_drain_pending(
         {"final_response": "done"}, adapter, source, key
     )
     assert (event, text) == (None, None)  # discarded by the drain, so it runs only on the retry
+
+
+@pytest.mark.asyncio
+async def test_refused_wake_leaves_a_newer_pending_followup_in_place():
+    """The refusal only retracts the wake itself: a follow-up that replaced it in the pending slot
+    (different event object) is a still-deliverable message and must survive (#145049)."""
+    runner, adapter, source, _turns = wake_route()
+    key = adapter._event_session_key(MessageEvent(text="", source=source))
+    adapter._active_sessions[key] = asyncio.Event()  # a turn is still running in this chat
+    store = adapter._busy_session_handler
+
+    async def store_then_replace_then_drain(event, session_key):
+        handled = await store(event, session_key)  # the wake is now the pending follow-up
+        newer = MessageEvent(text="real user follow-up", source=source)
+        adapter._pending_messages[session_key] = newer  # a later message replaced the slot
+        runner._draining = True
+        return handled
+
+    adapter._busy_session_handler = store_then_replace_then_drain
+    with pytest.raises(WakeNotAccepted):
+        await deliver_wake(adapter, text="[kanban] Task t_1 completed.", source=source)
+    assert adapter._pending_messages.get(key) is not None
+    assert adapter._pending_messages[key].text == "real user follow-up"
