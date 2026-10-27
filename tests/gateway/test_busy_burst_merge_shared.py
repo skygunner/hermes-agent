@@ -91,3 +91,33 @@ async def test_busy_burst_is_admitted_once(monkeypatch, tmp_path, case, follow_u
     finish.set()
     await async_wait_until(lambda: len(executed) >= 1 + len(expected), timeout=10, what='every merged turn executed')
     await asyncio.to_thread(authority.db.close)
+
+
+@pytest.mark.asyncio
+async def test_debounced_text_never_merges_into_internal_pending_slot():
+    """Debounced queue-mode text must not merge into a receipted internal wake (#145047).
+
+    merge_pending_message_event with merge_text=True would append the human text to the
+    wake, which inherits the wake's _admitted_before_drain mark and could run during a
+    restart drain. The flush must refuse the merge and keep the wake's text intact.
+    """
+    from gateway.config import Platform, PlatformConfig
+    from gateway.platforms.base import TextDebounceState
+    from gateway.platforms.event import MessageEvent
+    from plugins.platforms.discord.adapter import DiscordAdapter
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token='fixture-token', typing_indicator=False,
+                                            extra={'group_sessions_per_user': False}))
+    source = adapter.build_source(chat_id='room', chat_type='group', user_id='42')
+    wake = MessageEvent(text='wake', source=source, message_id='wake1', internal=True)
+    key = adapter._event_session_key(wake)
+    adapter._pending_messages[key] = wake
+    human = MessageEvent(text='hello', source=source, message_id='h1')
+    adapter._text_debounce[key] = TextDebounceState(event=human, task=None, first_ts=0.0, last_ts=0.0)
+
+    flushed = await adapter._flush_text_debounce_now(key)
+
+    assert flushed is False
+    pending = adapter._pending_messages.get(key)
+    assert pending is wake and pending.text == 'wake'
+    assert getattr(human, '_admitted_before_drain', False) is False

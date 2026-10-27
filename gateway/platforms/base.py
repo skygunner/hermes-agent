@@ -3761,7 +3761,7 @@ class BasePlatformAdapter(ABC):
             state = store.get(session_key)
             if state is not None and not self._can_merge_text_debounce_events(state.event, event):
                 existing_pending = self._pending_messages.get(session_key)
-                if existing_pending is not None and self._can_merge_text_debounce_events(existing_pending, event):
+                if existing_pending is not None and not getattr(existing_pending, "internal", False) and self._can_merge_text_debounce_events(existing_pending, event):
                     merge_pending_message_event(self._pending_messages, session_key, event, merge_text=True)
                 return
         now = time.monotonic()
@@ -3805,7 +3805,7 @@ class BasePlatformAdapter(ABC):
         state.cancel_timer(unless=asyncio.current_task())
         state.task = None
         pending = self._pending_messages.get(session_key)
-        if pending is not None and not self._can_merge_text_debounce_events(pending, state.event):
+        if pending is not None and (getattr(pending, "internal", False) or not self._can_merge_text_debounce_events(pending, state.event)):
             return False
         store.pop(session_key, None)
         merge_pending_message_event(self._pending_messages, session_key, state.event, merge_text=True)
