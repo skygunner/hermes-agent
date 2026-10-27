@@ -405,6 +405,10 @@ def _start_inflight_turn(
     if isinstance(display_metadata, dict):
         turn["display_metadata"] = dict(display_metadata)
     session["inflight_turn"] = turn
+    # Outlives the turn: a queued copy of this same text admitted before the turn was known is a
+    # duplicate, and the drain must still recognize it once the inflight snapshot is cleared (#145251).
+    if turn["user"]:
+        session["_last_turn_user_text"] = turn["user"]
 
 
 def _append_inflight_delta(session: dict, delta: Any) -> None:

@@ -206,10 +206,22 @@ def _drop_queued_duplicates_of_inflight_user(session: dict) -> None:
     """
     if not (original := _ac_inflight_original(session)):
         return
+    _drop_queued_duplicates_of_text(session, original)
+
+
+def _drop_queued_duplicates_of_text(session: dict, original: Any) -> None:
+    """Remove queued envelopes that only repeat ``original`` (a merged one keeps its follow-up).
+
+    A copy admitted before the live turn was known (agent build window) or a client retry of an
+    interrupted turn escapes the enqueue-time scrub; at drain the same text would start a second
+    agent turn for an already-running message (#145251, #84417).
+    """
+    if not isinstance(original, str) or not original:
+        return
     head = session.get("queued_prompt")
-    cleaned = (_sanitize_queued_entry_vs_inflight_user(e, original)
-               for e in ([head] if head else []) + list(session.get("queued_prompts") or []))
-    _ac_set_queue(session, [c for c in cleaned if c is not None])
+    entries = ([head] if head else []) + list(session.get("queued_prompts") or [])
+    cleaned = (_sanitize_queued_entry_vs_inflight_user(entry, original) for entry in entries)
+    _ac_set_queue(session, [entry for entry in cleaned if entry is not None])
 
 
 def _ac_set_queue(session: dict, entries: list) -> None:
@@ -457,6 +469,9 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
 def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     """Fire a queued next-turn prompt if one is waiting and the session is idle. True when dispatched: the caller
     skips lower-priority follow-ups this cycle (the user's message wins)."""
+    with session["history_lock"]:
+        _drop_queued_duplicates_of_text(
+            session, _ac_inflight_original(session) or session.get("_last_turn_user_text") or "")
     with _session_turn_admission(session) as admitted:
         if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
             return False
@@ -480,6 +495,9 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
             session["running"] = False
             return True
+        # The dispatching text is this turn's user message now: any other queued copy of it was
+        # admitted before this turn was known and would drain as a second agent turn (#145251).
+        _drop_queued_duplicates_of_text(session, queued.get("text"))
     kwargs: dict = {"queued_prompt_generation": queue_generation}
     if queued.get("image_paths"):
         kwargs["image_paths"] = queued["image_paths"]
