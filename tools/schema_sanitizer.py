@@ -27,6 +27,16 @@ def _empty_object() -> dict:
     return {"type": "object", "properties": {}, "required": []}
 
 
+def is_free_form_object(node: Any) -> bool:
+    """An ``object`` node that declares no ``properties`` but allows extra keys (an absent
+    ``additionalProperties`` allows anything). Such a node must NOT gain ``properties: {}``:
+    the empty map reads as "no fields allowed", so a model sends ``{}`` for a free-form
+    argument and the server rejects the call (#143538)."""
+    return (isinstance(node, dict) and node.get("type") == "object"
+            and not isinstance(node.get("properties"), dict)
+            and node.get("additionalProperties", True) is not False)
+
+
 def _rewrite(schema: Any, fn: Callable[[dict], Any]) -> Any:
     """Bottom-up map over a schema tree: lists/dicts recurse, then *fn* sees each dict."""
     if isinstance(schema, list):
@@ -296,9 +306,10 @@ def _normalize_type_array(value: list, out: dict) -> None:
 
 def _sanitize_node(node: Any, path: str) -> Any:
     """Recursively sanitize a JSON-Schema fragment: bare-string schemas → ``{"type": <value>}``
-    (unknown strings → permissive object); object nodes gain ``properties: {}``; ``type`` arrays
-    are normalized; property keys are renamed to the provider-safe pattern and ``required``
-    follows, with entries missing from ``properties`` pruned.
+    (unknown strings → permissive object); object nodes gain ``properties: {}`` unless they are
+    free-form (see ``is_free_form_object``); ``type`` arrays are normalized; property keys are
+    renamed to the provider-safe pattern and ``required`` follows, with entries missing from
+    ``properties`` pruned.
 
     - Normalizes ``type: [X, "null"]`` arrays to single ``type: X`` (keeping ``nullable: true`` as a hint),
     and multi-type arrays like ``["number", "string"]`` to an ``anyOf`` of single-type schemas so no branch
@@ -366,13 +377,14 @@ def _sanitize_node(node: Any, path: str) -> Any:
             required = required if isinstance(required, list) else []
             out["required"] = required + [key for key in lifted if key not in required]
     if out.get("type") == "object":
-        if not isinstance(out.get("properties"), dict):
-            out["properties"] = {}
+        props = out.get("properties")
+        if not isinstance(props, dict) and not is_free_form_object(out):
+            props = out["properties"] = {}
         # Always emit a list: ``required: []`` is valid everywhere, while a missing or
         # non-list key reads as ``null`` on strict OpenAI-compatible proxies (#56123).
         required = out.get("required")
-        out["required"] = ([r for r in required if isinstance(r, str) and r in out["properties"]]
-                           if isinstance(required, list) else [])
+        out["required"] = ([r for r in required if isinstance(r, str) and r in props]
+                           if isinstance(required, list) and isinstance(props, dict) else [])
     return out
 
 

@@ -25,20 +25,28 @@ def test_object_without_properties_gets_empty_properties():
     assert out[0]["function"]["parameters"] == {"type": "object", "properties": {}, "required": []}
 
 
-def test_nested_object_without_properties_gets_empty_properties():
+def test_open_nested_object_gets_no_empty_properties():
+    """Only a closed object (``additionalProperties: false``) and the parameters root keep a
+    synthesized ``properties: {}``: on an open object (``additionalProperties`` absent or any
+    value other than ``false``) the empty map reads as "no fields allowed", so models send
+    ``{}`` for a free-form argument and the server rejects the call (#143538)."""
     tools = [_tool("t", {
         "type": "object",
         "properties": {
             "name": {"type": "string"},
-            "arguments": {"type": "object", "description": "free-form"},
+            "arguments": {"type": "object", "additionalProperties": True, "description": "free-form"},
+            "bare": {"type": "object", "description": "free-form"},
+            "closed": {"type": "object", "additionalProperties": False},
         },
         "required": ["name"],
     })]
     out = sanitize_tool_schemas(tools)
-    args = out[0]["function"]["parameters"]["properties"]["arguments"]
-    assert args["type"] == "object"
-    assert args["properties"] == {}
-    assert args["description"] == "free-form"
+    props = out[0]["function"]["parameters"]["properties"]
+    assert props["arguments"] == {"type": "object", "additionalProperties": True,
+                                 "description": "free-form", "required": []}
+    assert props["bare"] == {"type": "object", "description": "free-form", "required": []}
+    assert props["closed"] == {"type": "object", "additionalProperties": False,
+                               "properties": {}, "required": []}
 
 
 def test_bare_string_object_value_replaced_with_schema_dict():
@@ -129,7 +137,7 @@ def test_anyof_nested_objects_sanitized():
     })]
     out = sanitize_tool_schemas(tools)
     variants = out[0]["function"]["parameters"]["properties"]["opt"]["anyOf"]
-    assert variants[0] == {"type": "object", "properties": {}, "required": []}
+    assert variants[0] == {"type": "object", "required": []}
     assert variants[1] == {"type": "string"}
 
 
@@ -195,7 +203,7 @@ def test_additional_properties_schema_sanitized():
     })]
     out = sanitize_tool_schemas(tools)
     field = out[0]["function"]["parameters"]["properties"]["dict_field"]
-    assert field["additionalProperties"] == {"type": "object", "properties": {}, "required": []}
+    assert field["additionalProperties"] == {"type": "object", "required": []}
 
 
 def test_items_sanitized_in_array_schema():
@@ -210,7 +218,7 @@ def test_items_sanitized_in_array_schema():
     })]
     out = sanitize_tool_schemas(tools)
     items = out[0]["function"]["parameters"]["properties"]["bag"]["items"]
-    assert items == {"type": "object", "properties": {}, "required": []}
+    assert items == {"type": "object", "required": []}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -349,13 +357,13 @@ def test_dependent_schemas_still_recursively_sanitized():
             "owner": {"type": "string"},
         },
         "dependentSchemas": {
-            "owner": {"type": "object"},  # bare object -- needs properties: {}
+            "owner": {"type": "object"},  # bare open object -- gains ``required: []``, not ``properties: {}``
         },
     }
     tools = [_tool("t", copy.deepcopy(schema))]
     out = sanitize_tool_schemas(tools)
     dep_schemas = out[0]["function"]["parameters"]["dependentSchemas"]
-    assert dep_schemas["owner"] == {"type": "object", "properties": {}, "required": []}, (
+    assert dep_schemas["owner"] == {"type": "object", "required": []}, (
         f"dependentSchemas['owner'] was not fully sanitized: {dep_schemas['owner']!r}"
     )
 
@@ -576,6 +584,35 @@ def test_normalize_mcp_input_schema_still_repairs_declared_objects():
     assert bare["properties"] == {} and bare["required"] == []
 
 
+def test_mcp_call_tool_arguments_stay_free_form():
+    """#143538: FastMCP's ``call_tool(name, arguments: dict | None)`` advertised ``arguments`` as
+    an open object; the MCP normaliser and the per-request sanitizer each stamped
+    ``properties: {}`` on it, which models read as "no fields allowed" and answered with ``{}``
+    -- every call reached the server without its arguments. The root and closed objects keep the
+    empty map; the open nested object must stay free-form through BOTH stages."""
+    from tools.mcp_tool_schema import _normalize_mcp_input_schema
+
+    raw = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "description": "The name of the tool to call"},
+            "arguments": {
+                "anyOf": [{"type": "object", "additionalProperties": True}, {"type": "null"}],
+                "default": None,
+                "description": "Arguments to pass to the tool",
+            },
+        },
+    }
+    registered = _normalize_mcp_input_schema(copy.deepcopy(raw))
+    args = registered["properties"]["arguments"]
+    assert "properties" not in args, args
+    assert args["additionalProperties"] is True and args["nullable"] is True
+
+    sent = sanitize_tool_schemas([_tool("mcp__demo__call_tool", registered)])[0]
+    args = sent["function"]["parameters"]["properties"]["arguments"]
+    assert "properties" not in args, args
 
 
 def test_builtin_tool_without_required_gets_empty_required_list():

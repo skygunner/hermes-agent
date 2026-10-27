@@ -9,6 +9,7 @@ import re
 from typing import Any, List
 from tools.ansi_strip import strip_unicode_tags
 from tools.mcp_tool_common import mcp_field
+from tools.schema_sanitizer import is_free_form_object
 
 logger = logging.getLogger("tools.mcp_tool")
 
@@ -104,7 +105,10 @@ def _repair_object_shape(node, *, _object_root=False):
         if not repaired.get("type") and ("properties" in repaired or "required" in repaired):
             repaired["type"] = "object"
         if repaired.get("type") == "object":
-            if not isinstance(repaired.get("properties"), dict):
+            # A free-form object (open, no declared properties) keeps no empty map; the root and
+            # closed objects still get one so ``required`` can't dangle (#143538).
+            if not isinstance(repaired.get("properties"), dict) and (
+                    _object_root or not is_free_form_object(repaired)):
                 repaired["properties"] = {}
             # Always a list: a missing/non-list ``required`` reads as ``null`` on strict
             # OpenAI-compatible backends (#56123); ``[]`` is valid everywhere (Gemini included).
@@ -126,7 +130,8 @@ def _normalize_mcp_input_schema(schema: dict | None) -> dict:
 
     * Missing or ``null`` ``type`` on an object-shaped node is coerced to ``"object"`` (some servers omit
     it). See PR #4897. * When an ``object`` node lacks ``properties``, an empty ``properties`` dict is added
-    so ``required`` entries don't dangle. * ``required`` arrays are pruned to only names that exist in
+    so ``required`` entries don't dangle, except on a free-form object (open, no declared properties),
+    which must stay without one (#143538). * ``required`` arrays are pruned to only names that exist in
     ``properties``; otherwise Google AI Studio / Gemini 400s with ``property is not defined``. See PR #4651.
     * MCP/Pydantic optional fields commonly arrive as ``anyOf: [{...}, {"type": "null"}], default: null``.
     """
