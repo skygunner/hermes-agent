@@ -1,3 +1,7 @@
+# health: allow FILE_LINES -- restart wait now counts adapter session tasks (#145046); the 17-line growth
+# is bounded, function-scoped, and cannot be moved without refactoring the gateway shutdown
+# mixin which would be a larger scope change.
+
 """Stop/drain/restart, scale-to-zero and active-work accounting methods for GatewayRunner.
 
 Split out of ``gateway/run.py``; bound onto ``GatewayRunner`` via the MRO.
@@ -1553,6 +1557,11 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
         either way. Cron runs are counted per profile-scoped run by the scheduler, not by
         subtracting from the bare-ID active count: two profiles can run the same job ID, and one
         excluded run must not hide the other.
+
+        Also include adapter-side session tasks (#145046): a wake admitted via
+        ``adapter.handle_message`` may still be in ``adapter._session_tasks`` awaiting its profile
+        scope before it claims a runner slot. Count non-done tasks across all adapters so
+        ``request_restart()`` waits until the accepted handler reaches a runner slot.
         """
         non_cron = (
             self._running_agent_count()
@@ -1560,9 +1569,17 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
             + self._active_api_run_count()
             + self._active_deferred_agent_worker_count()
         )
+        adapter_tasks = 0
+        for adapter in self.adapters.values():
+            try:
+                adapter_tasks += sum(1 for t in adapter._session_tasks.values() if not t.done())
+            except (AttributeError, TypeError, RuntimeError):
+                # Adapter without _session_tasks dict, or iteration mutated during drain
+                logger.debug("Adapter session task count failed", exc_info=True)
         return (
             max(0, non_cron - self._wedged_chat_agent_count())
             + self._restart_wait_cron_counts()["awaitable"]
+            + adapter_tasks
         )
 
     def _describe_active_work(self) -> list:
