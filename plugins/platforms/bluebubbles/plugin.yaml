@@ -36,7 +36,7 @@ optional_env:
     prompt: "Home channel name"
     password: false
   - name: BLUEBUBBLES_WEBHOOK_HOST
-    description: "Webhook listener bind host (default 127.0.0.1)"
+    description: "Webhook listener bind host (default localhost: IPv4 + IPv6)"
     prompt: "Webhook host"
     password: false
   - name: BLUEBUBBLES_WEBHOOK_PORT

@@ -361,7 +361,7 @@ description: "Hermes Agent 使用的所有环境变量完整参考"
 | `WEIXIN_ALLOW_ALL_USERS` | 无需白名单允许所有微信用户（`true`/`false`） |
 | `BLUEBUBBLES_SERVER_URL` | BlueBubbles 服务器 URL（例如 `http://192.168.1.10:1234`） |
 | `BLUEBUBBLES_PASSWORD` | BlueBubbles 服务器密码 |
-| `BLUEBUBBLES_WEBHOOK_HOST` | webhook 监听绑定地址（默认：`127.0.0.1`） |
+| `BLUEBUBBLES_WEBHOOK_HOST` | webhook 监听绑定地址（默认：`localhost`，同时覆盖 IPv4 与 IPv6） |
 | `BLUEBUBBLES_WEBHOOK_PORT` | webhook 监听端口（默认：`8645`） |
 | `BLUEBUBBLES_HOME_CHANNEL` | cron/通知投递的手机/邮箱 |
 | `BLUEBUBBLES_ALLOWED_USERS` | 逗号分隔的授权用户 |

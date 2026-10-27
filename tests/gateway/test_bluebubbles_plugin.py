@@ -1,6 +1,7 @@
 """Tests for the BlueBubbles iMessage gateway adapter."""
 import asyncio
 import json
+from urllib.parse import urlparse
 from unittest.mock import AsyncMock
 
 import httpx
@@ -322,10 +323,25 @@ class TestBlueBubblesWebhookUrl:
 
     def test_default_host(self, monkeypatch):
         adapter = _make_adapter(monkeypatch)
-        # Default webhook_host is 0.0.0.0 → normalized to localhost
+        # Default webhook_host is localhost → registered URL is localhost
         assert "localhost" in adapter._webhook_url
         assert str(adapter.webhook_port) in adapter._webhook_url
         assert adapter.webhook_path in adapter._webhook_url
+
+    def test_registered_url_points_at_the_bound_host(self, monkeypatch):
+        """Regression #144114: BlueBubbles resolves localhost to ::1 first on macOS, so a
+        listener bound to 127.0.0.1 never receives the POSTs the localhost URL advertised."""
+        adapter = _make_adapter(monkeypatch)
+        assert adapter.webhook_host == "localhost"
+        assert urlparse(adapter._webhook_url).hostname == adapter.webhook_host
+
+    def test_explicit_loopback_registers_that_loopback(self, monkeypatch):
+        adapter = _make_adapter(monkeypatch, webhook_host="127.0.0.1")
+        assert urlparse(adapter._webhook_url).hostname == "127.0.0.1"
+
+    def test_wildcard_bind_registers_localhost(self, monkeypatch):
+        adapter = _make_adapter(monkeypatch, webhook_host="0.0.0.0")
+        assert urlparse(adapter._webhook_url).hostname == "localhost"
 
 
     def test_register_url_omits_query_when_no_password(self, monkeypatch):

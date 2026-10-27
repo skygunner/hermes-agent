@@ -42,7 +42,9 @@ _BLUEBUBBLES_AUDIO_EXT_OVERRIDES = {
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WEBHOOK_HOST = "127.0.0.1"
+# Loopback name so the listener covers IPv4 and IPv6: BlueBubbles Server resolves
+# ``localhost`` to ``::1`` first on macOS, so an IPv4-only bind never sees its POSTs (#144114).
+DEFAULT_WEBHOOK_HOST = "localhost"
 # Webhook events are small JSON/form payloads (attachments come through the REST API); 1 MiB keeps
 # oversized/chunked bodies from buffering unbounded.
 _WEBHOOK_MAX_BODY_BYTES = 1_048_576
@@ -64,7 +66,7 @@ _PAGINATION_SUFFIX_RE = re.compile(r"\s*\(\d+/\d+\)$")
 _ADDRESS_RE = re.compile(r"^\+\d+")
 
 _GUID_CACHE_SIZE = 500  # LRU cap for resolved chat-GUID lookups
-_LOCAL_HOSTS = {"0.0.0.0", "127.0.0.1", "localhost", "::"}
+_WILDCARD_HOSTS = {"0.0.0.0", "::", ""}
 
 
 def _redact(text: str) -> str:
@@ -257,7 +259,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         shared = getattr(self, "_shared_ingress_url", None)
         if shared:
             return shared
-        host = "localhost" if self.webhook_host in _LOCAL_HOSTS else self.webhook_host
+        host = "localhost" if self.webhook_host in _WILDCARD_HOSTS else self.webhook_host
         return f"http://{host}:{self.webhook_port}{self.webhook_path}"
 
     def _webhook_register_url_with(self, password_param: str) -> str:

@@ -144,7 +144,7 @@ You do **not** need to create a webhook in the BlueBubbles UI. When the gateway 
 Two details worth knowing:
 
 - The registered URL carries the server password as a query parameter (`?password=…`) because the BlueBubbles webhook API does not support custom headers — this is how inbound events are authenticated.
-- The webhook listener binds to `127.0.0.1` by default. That is fine when Hermes and BlueBubbles run on the same machine; if they are on different machines, set `BLUEBUBBLES_WEBHOOK_HOST` to an address the Mac running BlueBubbles can reach.
+- The webhook listener binds `localhost` by default, so it answers on both IPv4 and IPv6 (BlueBubbles Server resolves `localhost` to `::1` first on macOS). That is fine when Hermes and BlueBubbles run on the same machine; if they are on different machines, set `BLUEBUBBLES_WEBHOOK_HOST` to an address the Mac running BlueBubbles can reach.
 
 ## Environment Variables
 
@@ -152,7 +152,7 @@ Two details worth knowing:
 |----------|----------|---------|-------------|
 | `BLUEBUBBLES_SERVER_URL` | Yes | — | BlueBubbles server URL |
 | `BLUEBUBBLES_PASSWORD` | Yes | — | Server password |
-| `BLUEBUBBLES_WEBHOOK_HOST` | No | `127.0.0.1` | Webhook listener bind address |
+| `BLUEBUBBLES_WEBHOOK_HOST` | No | `localhost` | Webhook listener bind address |
 | `BLUEBUBBLES_WEBHOOK_PORT` | No | `8645` | Webhook listener port |
 | `BLUEBUBBLES_WEBHOOK_PATH` | No | `/bluebubbles-webhook` | Webhook URL path |
 | `BLUEBUBBLES_HOME_CHANNEL` | No | — | Phone/email for cron delivery |
@@ -209,7 +209,7 @@ One caveat: "basic messaging works without Private API" assumes BlueBubbles can 
 - Check `hermes logs gateway` for webhook errors (or `hermes logs -f` to follow in real-time)
 - Hermes registers the webhook itself on connect — only inspect BlueBubbles Server → Settings → API → Webhooks if the log shows a registration failure
 - A webhook row in the BlueBubbles UI is not proof of delivery; the end-to-end proof is Hermes logging the message and replying
-- If Hermes and BlueBubbles run on different machines, the default webhook bind address `127.0.0.1` is unreachable from the Mac — set `BLUEBUBBLES_WEBHOOK_HOST` to a reachable address and restart the gateway
+- If Hermes and BlueBubbles run on different machines, the default webhook bind address `localhost` is unreachable from the Mac — set `BLUEBUBBLES_WEBHOOK_HOST` to a reachable address and restart the gateway
 
 ### Setup succeeded, but the adapter never starts
 - `hermes gateway setup` saves credentials to `~/.hermes/.env`; it does not set `platforms.bluebubbles.enabled: true`
