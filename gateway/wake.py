@@ -113,6 +113,10 @@ async def admit_internal_event(adapter: Any, event: Any) -> None:
     # a claimed turn and the pending discard drops a queued follow-up. Refuse it so the producer
     # retries it after the restart.
     if _runner_draining(adapter):
+        # Remove any pending-slot copy so a shutdown-cancelled turn cannot spool it
+        # (flush_pending_to_file) and startup recovery cannot append it as a user row.
+        key = adapter._event_session_key(event)
+        adapter._pending_messages.pop(key, None)
         raise WakeNotAccepted("gateway began draining during admission; retry after restart",
                               reason="runtime_draining")
     # No drain began before or during admission, so the producer takes this receipt as final and
