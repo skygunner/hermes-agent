@@ -713,13 +713,11 @@ class TestLaunchdServiceRecovery:
         def fake_run(cmd, check=False, **kwargs):
             run_calls.append(cmd)
             if cmd[:2] == ["launchctl", "list"]:
-                # Post-bootstrap launchd reports a supervised PID; without one
-                # the success check correctly refuses to stop retrying.
-                return SimpleNamespace(
-                    returncode=0,
-                    stdout='{\n\t"PID" = 5150;\n\t"Label" = "ai.hermes.gateway";\n};',
-                    stderr="",
-                )
+                # bootout unloads the definition: `launchctl list <label>` exits 3 until the
+                # reload loads it; a PID then proves launchd supervises the gateway.
+                if any(c[:2] == ["launchctl", "bootstrap"] for c in run_calls):
+                    return SimpleNamespace(returncode=0, stdout='{\n\t"PID" = 5150;\n\t"Label" = "ai.hermes.gateway";\n};', stderr="")
+                return SimpleNamespace(returncode=3, stdout="", stderr="")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)

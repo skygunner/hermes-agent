@@ -164,20 +164,30 @@ def _retry_launchctl_bootstrap_until_registered(
     domain: str, plist_path, label: str, *, deadline: float
 ) -> bool:
     """Retry ``_launchctl_bootstrap`` until the label supervises a process or ``deadline`` passes. Under
-    load bootstrap can fail even after bootout, during a drain (default 180s) — ~10s is too short."""
+    load bootstrap can fail even after bootout, during a drain (default 180s) — ~10s is too short.
+
+    A label launchd holds without running it (an on-demand plist, or a ``gui/<uid>`` domain that does
+    not start jobs at bootstrap) is registered already, so re-bootstrapping it only fails EIO and boots
+    the job out: kickstart the job launchd already holds instead (#142741).
+    """
     attempt = 0
     while True:
         attempt += 1
+        registered = _gw()._launchd_service_registered(label)
+        action = "kickstart" if registered else "bootstrap"
         try:
-            _gw()._launchctl_bootstrap(domain, plist_path, label, timeout=30)
+            if registered:
+                _launchctl_kickstart_registered(domain, label)
+            else:
+                _gw()._launchctl_bootstrap(domain, plist_path, label, timeout=30)
             if _gw()._launchctl_label_supervising_process(label):
                 return True
-            outcome = f"exited 0 but {domain}/{label} has no supervised process (launchctl list)"
+            outcome = f"{action} exited 0 but {domain}/{label} has no supervised process (launchctl list)"
         except subprocess.CalledProcessError as exc:
-            outcome = f"failed (rc={exc.returncode}) for {domain}/{label}"
+            outcome = f"{action} failed (rc={exc.returncode}) for {domain}/{label}"
         except subprocess.TimeoutExpired:
-            outcome = f"timed out for {domain}/{label}"
-        _gw()._append_launchd_reload_log(f"bootstrap attempt {attempt} {outcome} — retrying")
+            outcome = f"{action} timed out for {domain}/{label}"
+        _gw()._append_launchd_reload_log(f"attempt {attempt}: {outcome} — retrying")
         if time.monotonic() >= deadline:
             return False
         time.sleep(2)
@@ -756,6 +766,13 @@ def launchd_start():
 
 def _launchctl_kickstart_current(label: str) -> None:
     subprocess.run(["launchctl", "kickstart", f"{_launchd_domain()}/{label}"], check=True, timeout=30)
+
+
+def _launchctl_kickstart_registered(domain: str, label: str) -> None:
+    """``launchctl kickstart domain/label`` for a job launchd holds but does not run (#142741). No ``-k``:
+    the caller only reaches it when nothing supervises the label, and ``-k`` would also kill a replacement
+    launchd started on its own — the caveat ``launchd_restart`` documents for KeepAlive."""
+    subprocess.run(["launchctl", "kickstart", f"{domain}/{label}"], check=True, timeout=30)
 
 
 def _launchd_bootstrap_and_kickstart(plist_path: Path, label: str) -> bool:
