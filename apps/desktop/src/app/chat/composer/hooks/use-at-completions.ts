@@ -237,7 +237,11 @@ export function useAtCompletions(options: {
         const base = items.length > 0 ? items : starters
 
         return { items: mergeCompletionEntries(extras, base, claimedHandles), query }
-      } catch {
+      } catch (err) {
+        // Completions are advisory, so the failure degrades to starters, but a
+        // silent catch hides routing bugs (e.g. a bot-chat owner profile that
+        // the gateway cannot resolve). Log so mis-routing is diagnosable.
+        console.warn('[use-at-completions] complete.path failed for session', sessionId, err)
         return { items: mergeCompletionEntries(extras, starters, claimedHandles), query }
       }
     },
