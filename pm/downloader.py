@@ -77,8 +77,36 @@ def _https_context() -> ssl.SSLContext:
     return context
 
 
+class _KeepAliveConnection:
+    # urllib forces Connection: close, which some CDN edges reset mid-download.
+    def request(self, method, url, body=None, headers=None, *, encode_chunked=False):
+        headers = dict(headers or {})
+        headers["Connection"] = "keep-alive"
+        return super().request(method, url, body, headers, encode_chunked=encode_chunked)
+
+
+class _KeepAliveHTTPConnection(_KeepAliveConnection, http.client.HTTPConnection):
+    pass
+
+
+class _KeepAliveHTTPSConnection(_KeepAliveConnection, http.client.HTTPSConnection):
+    pass
+
+
+class _KeepAliveHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_KeepAliveHTTPConnection, req)
+
+
+class _KeepAliveHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_KeepAliveHTTPSConnection, req, context=self._context,
+                            check_hostname=self._check_hostname)
+
+
 _OPENER = urllib.request.build_opener(
-    _HttpsRedirectHandler(), urllib.request.HTTPSHandler(context=_https_context())
+    _HttpsRedirectHandler(), _KeepAliveHTTPHandler(),
+    _KeepAliveHTTPSHandler(context=_https_context()),
 )
 
 

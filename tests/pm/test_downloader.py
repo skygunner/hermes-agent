@@ -426,3 +426,40 @@ def test_download_reports_a_hold_that_never_releases(dl_server, tmp_path, monkey
     with pytest.raises(RuntimeError, match="could not be renamed into place"):
         dl.run()
     assert not dest.exists()
+
+
+# ── request wire behaviour ────────────────────────────────────
+
+
+def test_every_download_request_asks_for_keep_alive(tmp_path):
+    """urllib's stock opener hard-codes ``Connection: close`` on every request, and
+    an edge in front of the assets host resets the stream mid-body on that
+    fingerprint: a large download died with ``ConnectionResetError`` after a few
+    MiB while curl, which sends keep-alive, fetched the same URL fine
+    (regression for #142463)."""
+    from http.server import HTTPServer
+
+    payload = _payload(1 << 20)
+    seen: list[str] = []
+
+    class _Recording(_Handler):
+        payloads = {"/ka": payload}
+        ranges_seen = []
+
+        def do_GET(self):
+            seen.append(self.headers.get("Connection", ""))
+            super().do_GET()
+
+    dest = tmp_path / "ka.bin"
+    with HTTPServer(("127.0.0.1", 0), _Recording) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            Download([Source(_url(server, "/ka"), dest, _sha(payload))],
+                     partials_dir=tmp_path / "partials").run()
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+    assert dest.read_bytes() == payload
+    assert seen, "no request reached the server"
+    assert set(seen) == {"keep-alive"}
