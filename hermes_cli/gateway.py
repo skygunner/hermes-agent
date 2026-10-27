@@ -2759,7 +2759,11 @@ def _system_service_identity(run_as_user: str | None = None) -> tuple[str, str, 
 def _read_systemd_user_from_unit(unit_path: Path) -> str | None:
     if not unit_path.exists():
         return None
-    for line in unit_path.read_text(encoding="utf-8-sig").splitlines():
+    try:
+        text = unit_path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return None  # root-owned 0640 unit: fall back to the default service user
+    for line in text.splitlines():
         if line.startswith("User="):
             return line.split("=", 1)[1].strip() or None
     return None
@@ -3333,7 +3337,10 @@ def systemd_unit_is_current(system: bool = False) -> bool:
     if not unit_path.exists():
         return False
 
-    installed = unit_path.read_text(encoding="utf-8-sig")
+    try:
+        installed = unit_path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return False  # unreadable (root-owned 0640): treat as not-current, refresh reports the real error
     expected_user = _read_systemd_user_from_unit(unit_path) if system else None
     expected = generate_systemd_unit(system=system, run_as_user=expected_user)
     # Ignore directives older systemd drops (RestartMaxDelaySec, RestartSteps) to avoid a perpetual "outdated" flag.

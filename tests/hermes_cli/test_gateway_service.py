@@ -2925,3 +2925,34 @@ class TestUnitAnchoredServiceIdentity:
 
         assert os.environ["HERMES_HOME"] == str(alice_home)  # the sync really ran
         assert gateway_cli.get_service_name() == pre_sync_name
+
+
+class TestUnreadableSystemdUnit:
+    """Regression #142822: a root-owned 0640 system unit is unreadable without sudo, and
+    read_text propagated PermissionError out of the refresh/compare path instead of degrading."""
+
+    @staticmethod
+    def _unit(tmp_path):
+        path = tmp_path / "hermes-gateway.service"
+        path.write_text("[Service]\nUser=hermes\n", encoding="utf-8")
+        return path
+
+    def test_user_reader_returns_none_when_unreadable(self, tmp_path, monkeypatch):
+        unit_path = self._unit(tmp_path)
+
+        def _raise(*_a, **_k):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "read_text", _raise)
+
+        assert gateway_cli._read_systemd_user_from_unit(unit_path) is None
+
+    def test_is_current_returns_false_when_unreadable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gateway_cli, "get_systemd_unit_path", lambda **_k: self._unit(tmp_path))
+
+        def _raise(*_a, **_k):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "read_text", _raise)
+
+        assert gateway_cli.systemd_unit_is_current(system=True) is False
