@@ -1654,10 +1654,14 @@ class CLITuiMixin:
     def _tui_collapse_paste(self, text: str, line_count: int, *, fallback: bool) -> str:
         """Save a large paste under ~/.hermes/pastes and return the placeholder for the buffer."""
         from cli import _hermes_home, datetime, logger
+        import os
+        import uuid
         self._tui_paste_counter += 1
         paste_dir = _hermes_home / "pastes"
         paste_dir.mkdir(parents=True, exist_ok=True)
-        paste_file = paste_dir / f"paste_{self._tui_paste_counter}_{datetime.now().strftime('%H%M%S')}.txt"
+        ts = datetime.now().strftime('%H%M%S')
+        unique = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        paste_file = paste_dir / f"paste_{self._tui_paste_counter}_{ts}_{unique}.txt"
         paste_file.write_text(text, encoding="utf-8")
         logger.info(
             "Collapsed paste #%d: %d lines, %d chars -> %s" + (" (fallback)" if fallback else ""),
