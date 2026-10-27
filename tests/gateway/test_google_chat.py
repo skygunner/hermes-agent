@@ -1380,6 +1380,18 @@ class TestOutboundThreadRouting:
         )
         assert result == "spaces/X/threads/CACHED"
 
+    def test_resolve_main_flow_dm_with_thread_top_level_does_not_fall_back(self, adapter):
+        """A main-flow DM reply carries thread_top_level=True in metadata;
+        this marks the reply as intentionally top-level, so the cached
+        side-thread must NOT be used. Regression for #144312."""
+        adapter._last_inbound_thread["spaces/X"] = "spaces/X/threads/SIDE_THREAD"
+        result = adapter._resolve_thread_id(
+            reply_to=None,
+            metadata={"thread_top_level": True},
+            chat_id="spaces/X",
+        )
+        assert result is None
+
 
 # ===========================================================================
 # Send file delegation (voice/video/animation route through send_document)

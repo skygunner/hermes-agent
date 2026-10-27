@@ -1234,11 +1234,15 @@ class GoogleChatAdapter(BasePlatformAdapter):
         """Thread to reply under, or None: ``metadata['thread_id']`` → ``thread_name`` /
         ``thread_ts`` aliases → ``reply_to`` when already a ``spaces/X/threads/Y`` name →
         ``_last_inbound_thread[chat_id]`` (else DM replies land top-level). Cron deliveries
-        (``job_id`` in metadata) skip the last fallback so output is not buried in a stale thread."""
+        (``job_id`` in metadata) skip the last fallback so output is not buried in a stale thread.
+        A ``thread_top_level`` marker from the gateway means this is a main-flow DM reply:
+        do NOT fall back to the cached side-thread."""
         if metadata:
             for key in ("thread_id", "thread_name", "thread_ts"):
                 if metadata.get(key):
                     return str(metadata[key])
+            if metadata.get("thread_top_level"):
+                return None
         if reply_to and "/threads/" in reply_to and "/messages/" not in reply_to:
             return reply_to
         if metadata and metadata.get("job_id"):

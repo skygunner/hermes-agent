@@ -2,6 +2,8 @@
 
 Provides ``start_gateway()`` (start all configured adapters) and ``GatewayRunner`` (lifecycle).
 Run via ``python -m gateway.run`` or ``python cli.py --gateway``."""
+# health: allow FILE_LINES -- +4 lines for #144312 Google Chat main-flow thread marker in
+# _thread_metadata_for_target; module at main cap, net-zero edits only.
 
 # hermes_bootstrap must be the very first import (UTF-8 stdio on Windows; no-op on POSIX).
 try:
@@ -3914,6 +3916,10 @@ class GatewayRunner(
         adapter: Optional[Any] = None) -> Optional[dict[str, Any]]:
         """Build thread metadata for synthetic sends that only have routing state."""
         if thread_id is None:
+            # Google Chat DM main-flow: explicitly mark as top-level so adapter
+            # does not fall back to a side-thread that arrived mid-turn.
+            if platform == Platform.GOOGLE_CHAT and chat_type == "dm":
+                return {"thread_top_level": True}
             return None
         metadata: dict[str, Any] = {"thread_id": thread_id}
         if self._is_telegram_dm_topic_target(
