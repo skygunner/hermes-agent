@@ -312,9 +312,19 @@ def _require_orchestrator_tool(tool_name: str) -> None:
 def _board(board: Optional[str], *, quiet_close: bool = False):
     """``with _board(slug) as (kb, conn)``; lazy import so the module loads in non-kanban
     contexts. ``board=None`` keeps the env/symlink resolution chain; an explicit slug
-    overrides it per call. ``quiet_close`` swallows close() errors (best-effort bridges)."""
+    overrides it per call. ``quiet_close`` swallows close() errors (best-effort bridges).
+    If an explicit ``board=`` is provided but a fence pins the board (HERMES_KANBAN_DB
+    with _explicit_board_intent_pinned()), raise _Reject to prevent silent redirection.
+    """
     from hermes_cli import kanban_db as kb
     from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli import kanban_db as kbd  # for _explicit_board_intent_pinned
+    # Fence check: explicit board= must not silently redirect when pinned.
+    if board is not None and kbd._explicit_board_intent_pinned():
+        pin = os.environ.get("HERMES_KANBAN_DB", "").strip()
+        if pin:
+            raise _Reject(
+                f"kanban board '{board}' requested but HERMES_KANBAN_DB is pinned to '{pin}'. Machine flows are fenced to their assigned board; use the unpinned CLI (--board) or remove the pin for cross-board intent." )
     conn = kbc.connect(board=board)
     try:
         yield kb, conn
