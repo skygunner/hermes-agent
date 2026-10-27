@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- +5 lines for the #144869 memory-provider cwd fallback; module is at its main cap and net-zero edits only.
 """Implementation of :meth:`AIAgent.__init__` as ``init_agent(agent, ...)``.
 
 ``init_agent`` is a thin, ordered orchestrator over ``_init_*`` / ``_build_*`` phase
@@ -1199,6 +1200,13 @@ def _memory_provider_init_kwargs(agent, platform) -> dict[str, Any]:
             kwargs[_ident] = _val
     if agent.session_cwd:
         kwargs["cwd"] = agent.session_cwd
+    else:
+        # Gateway/Desktop pin the turn cwd via set_session_cwd(), which never lands on
+        # agent.session_cwd; providers still need the logical cwd (never os.getcwd()).
+        with suppress(Exception):
+            from agent.runtime_cwd import scoped_session_cwd
+            if scoped_session_cwd():
+                kwargs["cwd"] = scoped_session_cwd()
     # Profile identity for per-profile provider scoping
     with suppress(Exception):
         from hermes_cli.profiles import get_active_profile_name
