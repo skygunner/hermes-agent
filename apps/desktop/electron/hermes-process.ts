@@ -1,6 +1,8 @@
 import { execSync } from 'node:child_process'
 import fs from 'node:fs'
 
+import { windowsHermesProcess } from './hermes-process-identity'
+
 /**
  * The Hermes runtime executable, matched as a whole argv TOKEN's basename — never an
  * argv substring (root AGENTS.md HX003 forbids argv-substring process identity). A
@@ -80,6 +82,12 @@ export function isHermesProcess(pid: number): boolean {
     process.kill(pid, 0) // signal 0 = existence check, no signal sent
   } catch {
     return false
+  }
+
+  // Windows has no /proc and MSYS ps rejects the POSIX -o form, so the identity
+  // check rides Win32_Process.CommandLine via PowerShell CIM (#145235).
+  if (process.platform === 'win32') {
+    return windowsHermesProcess(pid)
   }
 
   // On macOS / Linux, check the command line to avoid PID recycling false positives.
