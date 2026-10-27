@@ -24,16 +24,20 @@ def _cache_path() -> Path:
     return get_hermes_home() / "cache" / _CACHE_FILENAME
 
 
-def config_fingerprint(config: dict) -> str:
-    """Stable hash of the connection-defining parts of an MCP server config."""
-    tools_filter = config.get("tools") or {}
+def config_fingerprint(config: dict, *, include_tools: bool = True) -> str:
+    """Stable hash of the connection-defining parts of an MCP server config. ``include_tools=False``
+    drops the ``tools.include``/``exclude`` selection: it chooses which of a server's tools a profile
+    registers and neither routes nor authenticates anything, so it is not part of a connection's
+    identity (the schema cache still keys on it — its manifest holds the filtered tool set)."""
     payload = {
         "command": config.get("command"),
         "args": config.get("args") or [],
         "url": config.get("url"),
-        "transport": config.get("transport"),
-        "tools_include": sorted(tools_filter.get("include") or []),
-        "tools_exclude": sorted(tools_filter.get("exclude") or [])}
+        "transport": config.get("transport")}
+    if include_tools:
+        tools_filter = config.get("tools") or {}
+        payload["tools_include"] = sorted(tools_filter.get("include") or [])
+        payload["tools_exclude"] = sorted(tools_filter.get("exclude") or [])
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

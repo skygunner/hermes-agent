@@ -561,6 +561,7 @@ def _register_mcp_servers(servers: dict[str, dict]) -> list[str]:
     if not servers:
         logger.debug("No explicit MCP servers provided")
         return _registration._existing_tool_names() if _core._mcp_registry_scope() is not None else []
+    _registration.reapply_tool_filters(servers)  # a tools.include edit applies without a reconnect
     new_servers = _select_new_servers(servers)
     if scoped_healed:
         logger.info("MCP: registered %d already-connected server(s) into this profile scope", scoped_healed)
@@ -684,6 +685,7 @@ def reconcile_mcp_servers_with_config() -> dict[str, list[str]]:
         _lifecycle.shutdown_mcp_servers(scope=scope, names=set(stale))
     for key in lazy:
         _forget_lazy_server(key)
+    _registration.reapply_tool_filters(servers)  # a tools.include edit applies on the next tick
     added = _awaiting_connect(wanted, scope)
     if added:
         discover_mcp_tools()

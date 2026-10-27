@@ -29,6 +29,8 @@ logger = logging.getLogger("tools.mcp_tool")
 _SCOPE_REFRESH_LOCKS = tuple(threading.RLock() for _ in range(16))
 
 _UTILITY_ORIGIN_PREFIX = "generated utility "
+# Connection key -> the selection already reported missing; one WARNING per occurrence (#145265).
+_TOOLS_MISSING_WARNED: dict[Any, frozenset] = {}
 # Utility tool key -> handler factory; each takes (server_name, tool_timeout).
 _UTILITY_HANDLER_FACTORIES = {
     "list_resources": _make_list_resources_handler, "read_resource": _make_read_resource_handler,
@@ -464,15 +466,18 @@ def _connection_identity(config: dict) -> tuple:
     credentials so the schema cache survives a token rotation). Two profiles pointing at the same URL
     with different headers/env/auth/client certificates/TLS policy are two identities; borrowing
     across them would call tools as the other user, or under the other profile's ``ssl_verify`` /
-    ``strict_redirect_headers``."""
+    ``strict_redirect_headers``. The ``tools`` selection is NOT part of the identity: it only picks
+    which of the server's tools a profile registers, so an edit must not read as a new connection
+    (the reconnect would be skipped and the tools would vanish — #145265)."""
     from tools.mcp_schema_cache import config_fingerprint
 
     def _frozen(value):
         return json.dumps(value or {}, sort_keys=True, default=str)
 
-    return (config_fingerprint(config), _frozen(config.get("env")), _frozen(config.get("headers")),
-            _auth_type(config), _frozen(config.get("client_cert")), _frozen(config.get("client_key")),
-            config.get("ssl_verify", True), bool(config.get("strict_redirect_headers")))
+    return (config_fingerprint(config, include_tools=False), _frozen(config.get("env")),
+            _frozen(config.get("headers")), _auth_type(config), _frozen(config.get("client_cert")),
+            _frozen(config.get("client_key")), config.get("ssl_verify", True),
+            bool(config.get("strict_redirect_headers")))
 
 
 def _auth_type(config: dict) -> str:
@@ -625,6 +630,107 @@ def _register_connected_into_current_scope(servers: dict) -> int:
                 server._registered_tool_names = sorted(
                     set(getattr(server, "_registered_tool_names", []) or ()) | set(names))
     return registered_servers
+
+
+def _tool_filter_signature(name: str, config: dict) -> tuple:
+    """The include/exclude selection a config asks for, however it is spelled: the whitelist mode
+    plus its normalized names, else the blacklist. The resources/prompts/events utility switches are
+    not part of it — a reapply never rebuilds the generated utilities."""
+    tools_filter = (config or {}).get("tools") or {}
+    include_raw = tools_filter.get("include")
+    if isinstance(include_raw, (str, list, tuple, set)):
+        return (True, frozenset(_normalize_name_filter(include_raw, f"mcp_servers.{name}.tools.include")))
+    return (False, frozenset(_normalize_name_filter(tools_filter.get("exclude"),
+                                                   f"mcp_servers.{name}.tools.exclude")))
+
+
+def _selected_tool_names(name: str, server: Any, config: dict) -> set[str]:
+    """Registry names of *server*'s native tools the config's filter selects (utilities excluded)."""
+    should_register = _make_tool_filter(name, config)
+    return {_schema.mcp_prefixed_tool_name(name, t.name) for t in (getattr(server, "_tools", None) or ())
+            if getattr(t, "name", None) and should_register(t.name)}
+
+
+def _warn_connection_without_tools(key, name: str, server: Any, config: dict) -> None:
+    """The state that had no log line at all (#145265): a live connection whose profile registry
+    holds none of the tools its filter selects. Re-armed once they are back."""
+    from tools.registry import registry
+
+    selected = _selected_tool_names(name, server, config)
+    if not selected or selected & set(registry.get_tool_names_for_toolset(f"mcp-{name}")):
+        _TOOLS_MISSING_WARNED.pop(key, None)
+        return
+    if _TOOLS_MISSING_WARNED.get(key) == selected:
+        return
+    _TOOLS_MISSING_WARNED[key] = selected
+    logger.warning(
+        "MCP server '%s' is connected but this profile's registry holds none of the %d tool(s) its "
+        "tools.include/exclude selects (%s): the profile lost that server's whole tool set while the "
+        "connection stayed up. Run /reload-mcp (or restart the gateway) to rebuild the overlay; if it "
+        "returns with the same config, the registration is buggy, not the filter.",
+        name, len(selected), ", ".join(sorted(selected)))
+
+
+def _reapply_tool_filter(key, server: Any, config: dict, scope: Optional[str]) -> bool:
+    """Re-register one live connection's tools under the config's current filter."""
+    from tools.registry import registry
+
+    name = _key_name(key)
+    registered = set(registry.get_tool_names_for_toolset(f"mcp-{name}"))
+    candidates = _resolve_name_collisions(
+        name, _tool_candidates(name, server._tools, _make_tool_filter(name, config), server.tool_timeout))
+    desired = {c.registry_name for c in candidates}
+    # Generated resource/prompt/event utilities are not part of the selection: never rebuild them here.
+    protected = {entry["schema"]["name"] for entry in _schema._build_utility_schemas(name)}
+    dropped = sorted(registered - desired - protected)
+    for tool_name in dropped:
+        registry.deregister(tool_name, scope=scope)
+    added = _register_candidates(name, candidates, check_fn=_make_check_fn(name), scope=lambda: scope,
+                                 lazy=False, key=key, execution_timeout=config.get("timeout"))
+    if not dropped and not added:
+        return False
+    with _core._lock:
+        server._registered_tool_names = sorted(
+            set(getattr(server, "_registered_tool_names", []) or ()) - set(dropped) | set(added))
+    _restore_server_toolset_alias(key)
+    logger.info("MCP server '%s': tools.include/exclude changed while connected — deregistered %s; "
+                "registered %s", name, ", ".join(dropped) or "nothing", ", ".join(added) or "nothing")
+    return True
+
+
+def reapply_tool_filters(servers: dict) -> list[str]:
+    """Follow ``tools.include``/``exclude`` edits on this profile's own live connections.
+
+    The filter picks which of a server's tools a profile registers; ``_connection_identity`` does not
+    include it, so an edit leaves the connection live and lands here instead of detaching the
+    overlay: tools the filter now rejects are deregistered, the ones it now selects registered, once
+    per server. Another profile's connection is that profile's own filtered registration
+    (``_register_connected_into_current_scope``), an editor session's manifest is frozen, and a
+    connection that is up while this profile's registry holds none of its tools now warns instead of
+    staying silent. Returns the server names whose selection changed."""
+    scope = _core._mcp_registry_scope()
+    with _core._lock:
+        own = [(key, server) for key, server in _core._servers.items()
+               if _key_scope(key) == scope and _key_name(key) in servers]
+    changed: list[str] = []
+    for key, server in own:
+        name = _key_name(key)
+        config = servers[name]
+        if (not mcp_server_enabled(config) or getattr(server, "session", None) is None
+                or (_core._server_registry_scope(key) or "").startswith("editor-session:")):
+            continue
+        applied = dict(getattr(server, "_config", None) or {})
+        if _tool_filter_signature(name, applied) != _tool_filter_signature(name, config):
+            # Only the selection follows the edit: route and credentials keep their identity, so a
+            # simultaneous credential change still reconnects instead of rewriting the connection.
+            applied.pop("tools", None)
+            if config.get("tools"):
+                applied["tools"] = config["tools"]
+            server._config = applied  # one report per edit, not per tick
+            if _reapply_tool_filter(key, server, config, scope):
+                changed.append(name)
+        _warn_connection_without_tools(key, name, server, config)
+    return changed
 
 
 def _register_from_cache_sync(name: str, config: dict, entry: dict) -> list[str]:
