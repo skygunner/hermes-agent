@@ -483,7 +483,7 @@ config = RLOOConfig(
 
 **Online RL methods**: See [references/online-rl.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/references/online-rl.md) for PPO, GRPO, RLOO, and OnlineDPO with detailed configurations.
 
-**GRPO deep dive**: See [references/grpo-training.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/references/grpo-training.md) for expert-level GRPO patterns — reward function design philosophy, training insights (why loss increases, mode collapse detection), hyperparameter tuning, multi-stage training, and troubleshooting. Production-ready template in [templates/basic_grpo_training.py](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/templates/basic_grpo_training.py).
+**GRPO deep dive**: See [references/grpo-training.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/references/grpo-training.md) for expert-level GRPO patterns — reward function design philosophy, training insights (loss interpretation, mode collapse detection), hyperparameter tuning, multi-stage training, and troubleshooting. Production-ready template in [templates/basic_grpo_training.py](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/templates/basic_grpo_training.py).
 
 ## Hardware requirements
 

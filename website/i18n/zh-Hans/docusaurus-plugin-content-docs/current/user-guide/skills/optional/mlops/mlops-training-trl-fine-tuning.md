@@ -448,7 +448,7 @@ config = PPOConfig(
 
 **在线 RL 方法**：参阅 [references/online-rl.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/references/online-rl.md)，了解 PPO、GRPO、RLOO 及 OnlineDPO 的详细配置。
 
-**GRPO 深度解析**：参阅 [references/grpo-training.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/references/grpo-training.md)，获取专家级 GRPO 模式——奖励函数设计理念、训练洞察（为何损失上升、模式崩溃检测）、超参数调优、多阶段训练及故障排查。生产就绪模板位于 [templates/basic_grpo_training.py](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/templates/basic_grpo_training.py)。
+**GRPO 深度解析**：参阅 [references/grpo-training.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/references/grpo-training.md)，获取专家级 GRPO 模式——奖励函数设计理念、训练洞察（损失解读、模式崩溃检测）、超参数调优、多阶段训练及故障排查。生产就绪模板位于 [templates/basic_grpo_training.py](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/training/trl-fine-tuning/templates/basic_grpo_training.py)。
 
 ## 硬件要求
 

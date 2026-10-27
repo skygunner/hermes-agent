@@ -309,30 +309,30 @@ trainer.train()
 
 ## Critical training insights
 
-### 1. Loss behavior (EXPECTED pattern)
-- **Loss starts near 0 and INCREASES during training** — this is CORRECT
-- Loss measures KL divergence from initial policy; the model is learning (diverging from original behavior to optimize rewards)
-- **Monitor reward metrics, not loss, for progress**
+### 1. Loss interpretation
+- Interpret training loss using the installed TRL version, selected loss type and configuration; a rising loss is not automatically correct.
+- The policy objective uses loss-type-specific masking and normalization; enabled KL penalties and other configured terms can also contribute to training loss. Do not equate it with the separately reported KL metric or assume a policy-only loss is logged.
+- Monitor reward metrics together with held-out task quality and stability; do not judge progress from any single curve.
 
 ### 2. Reward tracking
 
 Key metrics to watch:
 - `reward` — average across all completions
 - `reward_std` — diversity within groups (should remain > 0)
-- `kl` — KL divergence from reference (should grow moderately)
+- `kl` — KL divergence from the reference policy, when reported by the selected TRL version and configuration; the checked standard loss paths in [TRL 0.23.1](https://github.com/huggingface/trl/blob/4529a1c8b1813480a85b02c9c8e7f75a29085d65/trl/trainer/grpo_trainer.py#L1724-L1726) and [TRL 1.16.0](https://github.com/huggingface/trl/blob/1b5c75ed94b7387f42532adb090c935166d4878d/trl/trainer/grpo_trainer.py#L3267-L3268) log it only when `beta != 0`. Rising KL is not a health target.
 
-**Healthy pattern:**
+**Illustrative example when KL reporting is enabled (not an acceptance criterion):**
 ```
 Step   Reward    Reward_Std   KL
 100    0.5       0.3          0.02
 200    0.8       0.25         0.05
-300    1.2       0.2          0.08  ← Good progression
+300    1.2       0.2          0.08  ← Illustrative values only; not evidence of training quality
 400    1.5       0.15         0.12
 ```
 
 **Warning signs:**
 - `reward_std` → 0 (model collapsing to a single response)
-- `kl` exploding (> 0.5) — diverging too much, reduce LR
+- Unexpected `kl` changes — investigate against the selected configuration, baseline and task quality; there is no universal KL failure threshold or automatic learning-rate adjustment.
 - Reward stuck — reward functions too harsh or model capacity issue
 
 ### 3. Common pitfalls and solutions
@@ -497,7 +497,7 @@ A production-ready training script lives at **`../templates/basic_grpo_training.
 
 ## Critical reminders
 
-- **Loss goes UP during training** — this is normal (it's KL divergence)
+- Interpret loss in the context of the TRL version, loss type and configuration. Neither a rising loss nor KL alone proves training quality; assess held-out task quality and stability together.
 - **Use 3–5 reward functions** — single rewards often fail
 - **Test rewards before training** — debug each function independently
 - **Monitor `reward_std`** — should stay > 0.1 (avoid mode collapse)
