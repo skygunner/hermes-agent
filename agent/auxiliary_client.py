@@ -7386,9 +7386,9 @@ def _resolve_call_client(
         if client is None and resolved_provider != "auto" and not resolved_base_url:
             logger.warning("Vision provider %s unavailable, falling back to auto vision backends",
                            resolved_provider)
+            # model=None: the pinned model belongs to the dead provider; auto uses its own default.
             effective_provider, client, final_model = resolve_vision_provider_client(
-                provider="auto", model=resolved_model, async_mode=async_mode,
-                main_runtime=main_runtime)
+                provider="auto", model=None, async_mode=async_mode, main_runtime=main_runtime)
         if client is not None:
             resolved_provider = effective_provider or resolved_provider
     else:
