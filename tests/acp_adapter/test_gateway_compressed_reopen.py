@@ -43,6 +43,8 @@ async def test_compressed_acp_chat_lists_and_reopens_under_its_logical_id(tmp_pa
     from acp_adapter.gateway_server import GatewayACPAgent
 
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    import hermes_state
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', tmp_path / 'state.db')
     monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'acp': []}})
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())
     runner = SimpleNamespace(session_store=store, _session_db=store._db, adapters={}, _draining=False,
