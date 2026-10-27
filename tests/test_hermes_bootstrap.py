@@ -570,6 +570,33 @@ class TestHappyEyeballsSocketConnect:
         assert clock[0] == hb._HAPPY_EYEBALLS_DELAY_SECONDS
         assert sockets[0].closed is True and sockets[1] is winner
 
+    def test_empty_source_address_binds_wildcard_like_the_serial_path(self):
+        """source_address=("", 0) is valid stdlib usage (paho-mqtt's default bind_address,
+        #142908): the serial create_connection binds it as the family wildcard without
+        resolving it, so the racer must too instead of failing with getaddrinfo gaierror."""
+        _fresh_import()
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        port = listener.getsockname()[1]
+        try:
+            winner = socket.create_connection(("127.0.0.1", port), 5, source_address=("", 0))
+            try:
+                assert winner.getpeername()[1] == port
+                assert winner.getsockname()[1] > 0
+            finally:
+                winner.close()
+            # An explicit literal bind address keeps resolving and binding as before.
+            winner = socket.create_connection(("127.0.0.1", port), 5, source_address=("127.0.0.1", 0))
+            try:
+                assert winner.getpeername()[1] == port
+                assert winner.getsockname()[0] == "127.0.0.1"
+            finally:
+                winner.close()
+        finally:
+            listener.close()
+
     def test_racer_bug_raises_instead_of_falling_back_to_the_serial_walk(self, monkeypatch):
         """A non-OSError from the racer is a bug in the racer, not a network outcome: it must
         surface, never silently reroute the connect through the serial stock walker (which
