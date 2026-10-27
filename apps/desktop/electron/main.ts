@@ -306,6 +306,7 @@ import {
   tightenSecretFileMode,
   writeSecretFileAtomic
 } from './hardening'
+import { windowsHermesProcess } from './hermes-process-identity'
 import { assertNotPassiveSpawn } from './host-backend-singleton'
 import { HERMES_HUB_FALLBACK_ORIGIN, HERMES_HUB_ORIGIN, isHermesHubClipboardWrite } from './hub-iframe-policy'
 import { requestHudClose } from './hud-close'
@@ -8824,6 +8825,12 @@ function isHermesProcess(pid) {
     process.kill(pid, 0) // signal 0 = existence check, no signal sent
   } catch {
     return false
+  }
+
+  // Windows has no /proc and MSYS ps rejects the POSIX -o form, so the identity
+  // check rides Win32_Process.CommandLine via PowerShell CIM (#145235).
+  if (process.platform === 'win32') {
+    return windowsHermesProcess(pid)
   }
 
   // On macOS / Linux, check the command line to avoid PID recycling false positives.
