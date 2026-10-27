@@ -5,6 +5,7 @@ turns, so the move must respawn them in the new folder rather than keep running 
 """
 from dataclasses import replace
 from types import SimpleNamespace
+import json
 
 from gateway.session_policy import policy_scope
 from tests.acp_adapter.test_session_mcp_policy import owner, policy
@@ -23,14 +24,22 @@ def test_workspace_move_respawns_held_stdio_servers_in_the_new_folder(server_spe
     authority.sessions = {'moved': live}
     before = policy(authority, 'moved', server_spec, old)
     try:
+        def _unwrap(r):
+            if isinstance(r, str):
+                r = json.loads(r)
+            if isinstance(r, dict) and "result" in r:
+                return r["result"]
+            return r
+
         with policy_scope(before, authority=authority):
             name = next(n for n in registry.get_all_tool_names() if n.startswith('mcp__'))
-            assert str(old.resolve()) in registry.dispatch(name, {})
+            result = _unwrap(registry.dispatch(name, {}))
+            assert str(old.resolve()) in result
         # What a committed ``workspace`` mutation freezes: the same editor selection, a new cwd.
         moved = replace(before, cwd=str(new))
         with policy_scope(moved, authority=authority):
-            result = registry.dispatch(name, {})
-        assert str(new.resolve()) in result and str(old.resolve()) not in result
+            result = _unwrap(registry.dispatch(name, {}))
+            assert str(new.resolve()) in result and str(old.resolve()) not in result
     finally:
         live.subscribers.clear()
         release_editor_mcp(authority, ['moved'])
