@@ -5,6 +5,19 @@
 # ---------------------------------------------------------------------------
 
 class TestToolProgressProvenance:
+    def test_invalid_tool_progress_is_off_for_each_config_source(self):
+        from gateway.display_config import resolve_display_setting, resolve_tool_progress
+
+        for display in (
+            {"tool_progress": "errors"},
+            {"tool_progress_overrides": {"telegram": "errors"}},
+            {"platforms": {"telegram": {"tool_progress": "errors"}}},
+        ):
+            config = {"display": display}
+            assert resolve_display_setting(config, "telegram", "tool_progress") == "off"
+            assert resolve_tool_progress(config, "telegram") == ("off", True)
+        assert resolve_tool_progress({}, "telegram", "errors") == ("off", True)
+
     def test_winning_source_controls_mode_and_intent(self):
         from gateway.display_config import resolve_tool_progress
         from hermes_cli.plugins import discover_plugins

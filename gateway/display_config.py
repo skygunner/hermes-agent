@@ -130,8 +130,8 @@ _TRUTHY = {"true", "1", "yes", "on"}
 _FALSY = {"false", "0", "no"}
 
 
-def _norm_tristate(on: str, off: str, choices: set, extra_truthy: set = frozenset()):
-    """Normaliser for bool-or-keyword settings: bools/truthy tokens → *on*, falsy → *off*, else a known choice or *on*."""
+def _norm_tristate(on: str, off: str, choices: set, extra_truthy: set = frozenset(), invalid: str | None = None):
+    """Normalise bool-or-keyword settings, using *invalid* for unknown values when supplied."""
     def norm(value: Any) -> str:
         if isinstance(value, bool):
             return on if value else off
@@ -140,7 +140,7 @@ def _norm_tristate(on: str, off: str, choices: set, extra_truthy: set = frozense
             return off
         if val in _TRUTHY | extra_truthy:
             return on
-        return val if val in choices else on
+        return val if val in choices else (invalid if invalid is not None else on)
     return norm
 
 
@@ -181,7 +181,7 @@ def _norm_int(value: Any) -> int:
 
 
 _NORMALISERS: dict[str, Any] = {
-    "tool_progress": _norm_tristate("all", "off", {"off", "new", "all", "verbose", "log"}),
+    "tool_progress": _norm_tristate("all", "off", {"off", "new", "all", "verbose", "log"}, invalid="off"),
     "show_reasoning": _norm_bool,
     "streaming": _norm_bool,
     "interim_assistant_messages": _norm_bool,
