@@ -676,8 +676,9 @@ export function ModelCatalogMenu({
   // Keep the selected row in view while arrowing through the scrollable list. Window plans open at
   // the top (their Recommended picks); the current row stays highlighted and is scrolled to once the
   // user arrows or searches. Every other account keeps opening on the current model.
+  // When favorites exist, also open at top so the Favorites section is visible.
   const listRef = useRef<HTMLDivElement>(null)
-  const opensAtTop = Boolean(providers?.some(p => p.plan_usage))
+  const opensAtTop = Boolean(providers?.some(p => p.plan_usage)) || favoriteRows.length > 0
   const followKb = !opensAtTop || kbOverride !== null || Boolean(q)
 
   useEffect(() => {
