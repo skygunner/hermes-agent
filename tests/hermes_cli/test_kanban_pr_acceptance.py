@@ -21,7 +21,7 @@ def github(tmp_path, monkeypatch):
             sha = state["head"]
             if self.path == "/graphql":
                 value = {"data": {"repository": {"pullRequest": {
-                    "headRefOid": sha, "baseRefName": "main", "state": "OPEN",
+                    "headRefOid": sha, "baseRefName": "main", "state": state.get("pr_state", "OPEN"),
                     "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [
                         {"context": "required", "app": {"databaseId": 1}}]}}}}}}
             elif "/rules/branches/" in self.path:
@@ -43,7 +43,8 @@ def github(tmp_path, monkeypatch):
             elif "/statuses" in self.path:
                 value = [[]]
             elif "/pulls/" in self.path:
-                value = {"head": {"sha": sha}, "base": {"ref": "main"}, "state": "open"}
+                value = {"head": {"sha": sha}, "base": {"ref": "main"},
+                         "state": state.get("pull_state", "open"), "merged": state.get("merged", False)}
             else:
                 self.send_error(404)
                 return
@@ -129,6 +130,44 @@ def test_acceptance_receipts_and_terminal_write_share_run_ownership(github):
             assert kb.get_task(conn, tid).status != "done"
             assert conn.execute("SELECT count(*) FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (tid,)).fetchone()[0] == 0
             github.pop("race")
+
+
+# --- #145289: a closed-unmerged PR is a terminal refusal, not retryable infra ---
+
+
+def _acceptance_receipt(conn, task_id):
+    rows = conn.execute("SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (task_id,))
+    return json.loads(rows.fetchone()[0])
+
+
+@pytest.mark.platforms("linux")
+def test_closed_unmerged_contract_is_terminal_not_retryable_infra(github):
+    """A closed-unmerged PR can never satisfy the contract: acceptance refuses it as
+    the terminal `closed` class, never the retryable `infra` bucket a racy read or
+    API failure lands in."""
+    with connect() as conn:
+        github.update(pr_state="CLOSED", head="a" * 40)
+        tid = kb.create_task(conn, title="closed", completion_contract="acme/repo")
+        assert not kb.complete_task(conn, tid, result="done",
+                                    metadata={"published_pr": "https://github.com/acme/repo/pull/7"})
+        assert kb.get_task(conn, tid).status != "done"
+        receipt = _acceptance_receipt(conn, tid)
+        assert receipt["classification"] == "closed"
+        assert receipt["ok"] is False
+        assert "closed-unmerged" in receipt["detail"]
+
+
+@pytest.mark.platforms("linux")
+def test_pr_closed_during_collection_is_terminal_not_stale(github):
+    """The final completion-time read catching a close-mid-collection is the same
+    terminal refusal, not a head/base drift the operator is told to retry."""
+    with connect() as conn:
+        github.update(pr_state="OPEN", pull_state="closed", merged=False, head="a" * 40)
+        tid = kb.create_task(conn, title="closed-mid", completion_contract="acme/repo")
+        assert not kb.complete_task(conn, tid, result="done",
+                                    metadata={"published_pr": "https://github.com/acme/repo/pull/7"})
+        assert kb.get_task(conn, tid).status != "done"
+        assert _acceptance_receipt(conn, tid)["classification"] == "closed"
 
 
 # --- #122689: acceptance must read the repo as the ASSIGNEE profile's gh login ---

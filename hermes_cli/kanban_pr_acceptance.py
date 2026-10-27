@@ -129,8 +129,13 @@ def collect_acceptance(contract: str, published_pr: str | None,
         pr = repository["pullRequest"]
         sha, branch = pr["headRefOid"], pr["baseRefName"]
         receipt["head_sha"] = sha
-        if not re.fullmatch(r"[0-9a-f]{40}", sha) or pr["state"] not in {"OPEN", "MERGED"}:
-            raise ValueError("PR is closed or current head is unavailable")
+        if pr["state"] not in {"OPEN", "MERGED"}:
+            # A closed-unmerged PR can never satisfy the contract (#145289): no retry
+            # changes that, so refuse it terminally instead of letting the generic
+            # ValueError handler file it as a retryable infra blip.
+            return _closed(receipt, repo, number)
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("PR head is unavailable")
         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
         rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100",
@@ -172,9 +177,11 @@ def collect_acceptance(contract: str, published_pr: str | None,
                     "classification": classification, "conclusion": outcome})
         # Re-read after all pages: old-head successes are never transferable.
         current = _api(f"repos/{repo}/pulls/{number}", profile_home=profile_home)
-        if current["head"]["sha"] != sha or current["base"]["ref"] != branch or (current["state"] == "closed" and not current.get("merged")):
+        if current["head"]["sha"] != sha or current["base"]["ref"] != branch:
             receipt.update(classification="stale", detail="PR head/base changed while collecting evidence; retry.")
             return receipt
+        if current["state"] == "closed" and not current.get("merged"):
+            return _closed(receipt, repo, number)
         receipt["classification"] = next((x for x in outcomes if x != "success"), "missing" if not outcomes else "success")
         receipt["ok"] = receipt["classification"] == "success"
         return receipt
@@ -188,6 +195,16 @@ def collect_acceptance(contract: str, published_pr: str | None,
         # Never persist gh stderr (credentials/host details); the failed phase is actionable.
         receipt.update(classification="infra", detail="GitHub acceptance evidence unavailable or incomplete; check gh authentication/API access and retry.")
         return receipt
+
+
+def _closed(receipt: dict, repo: str, number: int) -> dict:
+    receipt.update(
+        classification="closed",
+        detail=f"The completion contract names closed-unmerged PR {repo}#{number}.",
+        recovery="Completion cannot succeed for a closed-unmerged PR and retrying will not help; "
+                 "open a card for the replacement PR in the same repository, or kanban_block this card for human input.",
+    )
+    return receipt
 
 
 def _classify(check: dict, sha: str, outcome: str | None, is_run: bool) -> str:

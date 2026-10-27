@@ -62,7 +62,11 @@ required contexts, paginates exact-head check runs and legacy statuses, then
 re-reads the PR head/base. Optional failed/skipped telemetry does not veto accepted
 required checks. Missing, pending, failed, cancelled, timed-out, stale, skipped or
 neutral **required** evidence cannot complete the card. Neither can zero-run
-acceptance, unreadable policy or GitHub API failures. A repository without required
+acceptance, unreadable policy or GitHub API failures. A closed-unmerged PR
+(including one closed while evidence was being collected) is refused with
+`classification=closed` — a terminal refusal, not a retryable infra failure;
+open a card for the replacement PR in the same repository or block this one for
+human input. A repository without required
 checks needs a local-only contract. `gh` must be authenticated with read access to
 the repository's checks and rules; no remote writes are performed by this gate.
 Acceptance reads run as the **assignee profile's** `gh` login — its `GH_TOKEN` /
