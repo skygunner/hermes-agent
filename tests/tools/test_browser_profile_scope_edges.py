@@ -516,3 +516,21 @@ def test_a_consenting_profile_never_reuses_another_profiles_real_profile_browser
         cdp_b, err_b = real_profile_cdp()
     assert err_a is None and err_b is None
     assert cdp_a != cdp_b
+
+
+def test_two_hermes_homes_never_share_harness_dirs_without_a_served_profile(tmp_path, monkeypatch):
+    """Regression for #143466: outside a served-profile scope the tag was empty, so every non-served
+    HERMES_HOME on the machine shared one browser-harness runtime/tmp dir."""
+    from tools import browser_use_cli as bu_cli
+
+    monkeypatch.setenv('BH_HOME', str(tmp_path / 'bh'))
+    seen = {}
+    for name in ('home-a', 'home-b'):
+        home = tmp_path / name
+        home.mkdir()
+        monkeypatch.setenv('HERMES_HOME', str(home))
+        env = bu_cli._base_subprocess_env()
+        seen[name] = (env.get('BH_RUNTIME_DIR'), env.get('BH_TMP_DIR'))
+
+    assert all(runtime and tmp for runtime, tmp in seen.values())
+    assert seen['home-a'] != seen['home-b']

@@ -191,7 +191,9 @@ def _base_subprocess_env() -> dict:
         env.pop("PYTHONPATH", None)
     env["PATH"] = _floor_subprocess_path(env.get("PATH", ""))
     env.setdefault("ANONYMIZED_TELEMETRY", "false")
-    namespace_harness_dirs(env, _served_profile_tag())  # a served profile's own harness runtime/tmp dirs
+    # A served profile gets its own harness runtime/tmp dirs; outside one, key them to this Hermes
+    # home so two homes on one machine never share harness state (screenshots, daemon logs).
+    namespace_harness_dirs(env, _served_profile_tag() or hermes_home_key())
     return env
 
 
