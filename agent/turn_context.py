@@ -810,12 +810,16 @@ def _collect_pre_llm_call_context(
         return ""
     try:
         from hermes_cli.lifecycle import invoke_hook as _invoke_hook
+        # model_user_message: the last message content as the model will see it
+        # (may include gateway prefixes), while original_user_message is the clean text.
+        _model_user_msg = messages[-1].get("content") if messages else original_user_message
         _pre_results = _invoke_hook(
             "pre_llm_call",
             session_id=agent.session_id,
             task_id=effective_task_id,
             turn_id=turn_id,
             user_message=original_user_message,
+            model_user_message=_model_user_msg,
             conversation_history=list(messages),
             is_first_turn=(not bool(conversation_history)),
             model=agent.model,
