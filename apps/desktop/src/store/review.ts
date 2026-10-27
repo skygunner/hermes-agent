@@ -150,6 +150,10 @@ export const $reviewCommitMsgBusy = atom(false)
 // tiles can sit in different worktrees than main, and reviewing "the diff I'm
 // looking at" must mean that tile's repo, not whatever main happens to be on.
 export const $reviewScopeCwd = atom<null | string>(null)
+// The repo root from the review list (git rev-parse --show-toplevel).
+// When the session cwd is a subdirectory of the repo, paths from the git diff
+// are repo-relative and must be joined against this root, not the session cwd.
+export const $reviewRepoRoot = atom<null | string>(null)
 // The composer target that opened the pane. The review pane is a shared
 // surface, but its "let the agent ship it" action must return to the session
 // whose worktree the user is reviewing, not broadcast to every mounted tile.
@@ -242,6 +246,7 @@ export async function refreshReview(): Promise<boolean> {
     const files = result.files.filter(file => !isExcludedPath(file.path))
 
     $reviewFiles.set(files)
+    $reviewRepoRoot.set(result.repoRoot || null)
 
     // Drop the selection if the file is gone (staged away, reverted) so the diff
     // pane doesn't strand on a ghost; otherwise lazily fetch its diff so a

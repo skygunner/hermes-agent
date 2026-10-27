@@ -1752,6 +1752,10 @@ export interface HermesReviewList {
   // The resolved base ref the scope diffed against (branch merge-base / turn
   // baseline), or null for the uncommitted scope.
   base: null | string
+  // The repo root (git rev-parse --show-toplevel). When the session cwd is a
+  // subdirectory of the repo, paths from the git diff are repo-relative and
+  // must be joined against the root, not the session cwd.
+  repoRoot: null | string
 }
 
 // The branch's PR (if any) as reported by `gh pr view`.
