@@ -4533,7 +4533,7 @@ def _start_gateway_housekeeping(
         (1, "gateway housekeeping memory trim", _housekeeping_memory_trim),
         (1, "MCP config reconcile", _mcp_config_reconciler(runner)),
         # Last: a real prune can hold this thread for a while; every other chore of the tick runs first.
-        (1, "Checkpoint prune tick", _housekeeping_checkpoint_prune)]
+        (1, "Checkpoint prune tick", profile_scoped_chore(runner, _housekeeping_checkpoint_prune))]
 
     # Between ticks the queue file is watched so a worker's send goes out when it is queued,
     # not up to ``interval`` later (#117307); the tick's drain above remains the fallback.
