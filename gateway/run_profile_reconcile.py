@@ -653,6 +653,29 @@ def profile_scoped_chore(runner, chore):
     return lambda: _for_each_served_profile(runner, lambda _label: chore())
 
 
+def channel_directory_scoped_chore(runner, adapters, loop):
+    """Housekeeping chore refreshing channel_directory.json for every served profile (#145259).
+
+    The unscoped chore wrote only the launch home's file (``build_channel_directory`` persists to
+    ``get_hermes_home()``), so a multiplexed gateway left named profiles' directories frozen. Each
+    served profile builds from its own adapters (``_profile_adapters``) under its runtime scope;
+    the unscoped launch build is preserved for single-profile gateways."""
+    from gateway.run import _handoff_watch_scopes, _housekeeping_channel_directory, _profile_runtime_scope
+    from hermes_constants import get_hermes_home
+
+    def chore():
+        if adapters:
+            _housekeeping_channel_directory(adapters, loop)
+        for profile_name, profile_home in _handoff_watch_scopes(runner):
+            profile_adapters = getattr(runner, "_profile_adapters", {}).get(profile_name) if profile_name else None
+            if not profile_adapters:
+                continue
+            with _profile_runtime_scope(profile_home or get_hermes_home()):
+                _housekeeping_channel_directory(profile_adapters, loop)
+
+    return chore
+
+
 def migrate_profile_identity_verb(runner):
     """Build the ``migrate-profile-identity`` control-verb handler for ``hermes profile rename``
     (#111926). The live multiplexer owns the routing index in memory and writes it back

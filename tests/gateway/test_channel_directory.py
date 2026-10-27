@@ -395,3 +395,69 @@ class TestChannelAliases:
                  if e["id"] == "120363@g.us"]
         assert names == ["general"]
 
+
+
+
+class TestMultiplexScopedChore:
+    def test_chore_builds_each_served_profile_directory(self, tmp_path, monkeypatch):
+        """A multiplexed housekeeping tick builds every served profile's own
+        channel_directory.json under that profile's scope and adapters
+        (#145259); a served profile with no adapters and the unserved
+        home are never written."""
+        import asyncio
+        import threading
+        from contextlib import contextmanager
+        from pathlib import Path
+
+        import gateway.channel_directory as cd_mod
+        import gateway.run as run_mod
+
+        from gateway.run_profile_reconcile import channel_directory_scoped_chore
+        from hermes_constants import (
+            get_hermes_home,
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+
+        launch_home = tmp_path / "launch"
+        sec_home = tmp_path / "secondary"
+        unserved_home = tmp_path / "unserved"
+        for home in (launch_home, sec_home, unserved_home):
+            home.mkdir()
+
+        runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=True))
+        launch_adapters = {"launch": object()}
+        sec_adapters = {"secondary": object()}
+        runner._profile_adapters = {"secondary": sec_adapters}
+
+        monkeypatch.setattr(run_mod, "_multiplex_profile_homes",
+                            lambda config: [("default", str(launch_home)), ("secondary", str(sec_home))])
+
+        @contextmanager
+        def fake_scope(home, *args, **kwargs):
+            token = set_hermes_home_override(str(home))
+            try:
+                yield
+            finally:
+                reset_hermes_home_override(token)
+
+        monkeypatch.setattr(run_mod, "_profile_runtime_scope", fake_scope)
+
+        built = []
+
+        async def fake_build(adapters):
+            built.append((Path(get_hermes_home()), tuple(adapters)))
+
+        monkeypatch.setattr(cd_mod, "build_channel_directory", fake_build)
+
+        loop = asyncio.new_event_loop()
+        threading.Thread(target=loop.run_forever, daemon=True).start()
+        try:
+            channel_directory_scoped_chore(runner, launch_adapters, loop)()
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+
+        # Launch home keeps its unscoped build (its process home IS the launch profile's);
+        # each named secondary builds under its own home and adapters.
+        assert built == [(Path(get_hermes_home()), ("launch",)), (sec_home, ("secondary",))]
+        assert not (unserved_home / "channel_directory.json").exists()
