@@ -582,9 +582,9 @@ def describe_profile(profile: Any) -> dict[str, Any]:
 def extract_profiles_main(path: str, module_name: str) -> int:
     """``--extract-profiles``: one-shot, credential-free; prints the profiles as JSON on stdout."""
     import json
+    import hermes_bootstrap  # import before _take_protocol_streams: re-exec must not orphan the dup'd fds
     reader, writer = _take_protocol_streams()
     del reader
-    import hermes_bootstrap
     try:
         payload = {"profiles": [_extraction_entry(p) for p in capture_profiles(path, module_name)]}
     except Exception as exc:
@@ -595,8 +595,8 @@ def extract_profiles_main(path: str, module_name: str) -> int:
 
 
 def main() -> int:
+    import hermes_bootstrap  # import before _take_protocol_streams: re-exec must not orphan the dup'd fds
     reader, writer = _take_protocol_streams()
-    import hermes_bootstrap
     logging.basicConfig(stream=sys.stderr, level=os.environ.get("HERMES_PLUGIN_HOST_LOG_LEVEL", "WARNING"),
                         format="%(levelname)s %(name)s: %(message)s")
     runtime = HostRuntime(reader, writer)
