@@ -19,6 +19,9 @@ from agent.conversation_compression import (
     compression_skipped_due_to_lock, context_compression_timed_out,
     conversation_history_after_compression, ensure_compression_feasibility_checked,
 )
+from agent.conversation_compression_inflight import (
+    request_exceeds_input_budget, wait_for_compression_lock_release,
+)
 from agent.turn_context import _review_fork_first_request_pending
 from agent.turn_context_compaction import (
     _apply_grown_window, _blocked_compress_reason, _clear_overflow_warn, _refund_api_call,
@@ -52,6 +55,25 @@ class PreflightGateVerdict:
     _provider_overflow_recovery_pending: Any
     _last_preflight_pressure: Any
     result: Optional[dict[str, Any]] = None
+
+
+def _over_window_lock_skip_verdict(
+    agent: Any, v: PreflightGateVerdict, request_pressure_tokens: int
+) -> Optional[tuple[str, Optional[dict[str, Any]]]]:
+    """``(action, result)`` for a lock-skipped request that could not fit even before the provider's
+    output reservation: sending it unchanged is a guaranteed 400 (#145249). Waits for the holder's
+    fenced commit and re-enters the loop so the freed lock compresses, or ends the turn as
+    ``compression_deferred`` when no commit lands in the compression timeout. ``None`` = proceed."""
+    if not compression_skipped_due_to_lock(agent):
+        return None
+    if request_exceeds_input_budget(agent, request_pressure_tokens) is not True:
+        return None
+    from agent.conversation_loop import _compression_deferred_result
+
+    v.api_call_count = _refund_api_call(agent, v.api_call_count)
+    if wait_for_compression_lock_release(agent):
+        return ("continue", None)
+    return ("return", _compression_deferred_result(agent, v.messages, v.api_call_count, reason="lock"))
 
 
 def run_preflight_compression(
@@ -166,6 +188,9 @@ def run_preflight_compression(
             v._last_preflight_pressure = None
             if v.pending_moa_prepared_request is moa_prepared_request:
                 v.pending_moa_prepared_request = None
+            _lock_skip = _over_window_lock_skip_verdict(agent, v, request_pressure_tokens)
+            if _lock_skip is not None:
+                return _done(*_lock_skip)
         else:
             _reset_retry_state_after_compaction(agent)
             # Re-baseline the flush cursor: rotation returns None (child flushes

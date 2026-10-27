@@ -378,6 +378,12 @@ class PreflightCompressionTimedOut(RuntimeError):
     """Raised when an oversized turn cannot safely finish preflight."""
 
 
+class PreflightCompressionDeferred(RuntimeError):
+    """Raised when an over-window turn waited out an in-flight summary that never committed: the
+    provider call was not sent, the session is intact, and the turn must end as
+    ``compression_deferred`` (never ``compression_exhausted`` — the gateway wipes a session on that)."""
+
+
 def _fail_closed_after_preflight_timeout(agent, request_tokens: int) -> None:
     """Stop an oversized turn instead of sending its unchanged provider payload.
     Only a request the model cannot accept (above its context window, or of unknown fit) is stopped: a

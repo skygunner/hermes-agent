@@ -19,6 +19,9 @@ from agent.conversation_compression import (
     IDLE_COMPACTION_STATUS_TEMPLATE, PREFLIGHT_COMPRESSION_STATUS_TEMPLATE,
     compression_skipped_due_to_lock, conversation_history_after_compression,
 )
+from agent.conversation_compression_inflight import (
+    compression_lock_held, request_exceeds_input_budget, wait_for_compression_lock_release,
+)
 
 logger = logging.getLogger("agent.turn_context")
 
@@ -290,6 +293,7 @@ def _preflight_compression(
             f"{_preflight_tokens:,}", f"{_compressor.threshold_tokens:,}",
             f"{_compressor.last_real_prompt_tokens:,}",
         )
+        _should_compress_now = _oversize_request_waits_out_inflight_summary(agent, _preflight_tokens)
     elif _compression_cooldown:
         logger.info(
             "Skipping preflight compression: same-session cooldown active "
@@ -431,6 +435,29 @@ def _run_preflight_passes(
             # Sub-5% progress on a request still above the window: no further pass will get under it.
             _tc._fail_closed_on_insufficient_progress(agent, _preflight_tokens)
             break
+
+
+def _oversize_request_waits_out_inflight_summary(agent: Any, preflight_tokens: int) -> bool:
+    """Whether a deferred rough estimate must still be acted on (#145249).
+
+    The estimate is too rough to compress on, but not too rough to send on: while another path's
+    summary is in flight, a request above the provider's input budget has nothing that can shrink it
+    before the provider call, so this waits (bounded by ``compression.context_timeout_seconds``) for
+    the fenced commit and reports ``True`` so the caller gates again on the freed lock. ``False``
+    keeps today's skip — no summary is in flight, so there is nothing to wait for. Raises
+    ``PreflightCompressionDeferred`` when no commit lands, ending the turn without a provider call.
+    """
+    if request_exceeds_input_budget(agent, preflight_tokens) is not True or not compression_lock_held(agent):
+        return False
+    if wait_for_compression_lock_release(agent):
+        return True
+    from agent import turn_context as _tc
+
+    raise _tc.PreflightCompressionDeferred(
+        "Context compression is already running for this session and the request "
+        f"(~{preflight_tokens:,} tokens) does not fit the model's input budget. "
+        "The provider call was not sent; retry in a moment."
+    )
 
 
 def _engine_preflight_maintenance(

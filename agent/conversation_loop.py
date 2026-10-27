@@ -34,7 +34,7 @@ from agent.runtime_cwd import resolve_agent_cwd
 from agent.surface_switch import (
     identity_line_value, note_inert_pinned_tools, runtime_host_value, stage_surface_switch_note,
 )
-from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
+from agent.turn_context import PreflightCompressionDeferred, PreflightCompressionTimedOut, build_turn_context
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from hermes_cli.plugins_dispatch import held_stream_transforms
 from agent.turn_retry_state import TurnRetryState
@@ -1437,6 +1437,25 @@ def _preflight_timeout_result(agent, exc, conversation_history) -> dict[str, Any
     )
 
 
+def _preflight_abort_result(agent, exc, conversation_history) -> dict[str, Any]:
+    """Typed result for a turn-start preflight that ended the turn before the provider call: a
+    compression timeout is exhaustion (#98424), a waited-out in-flight summary is only a defer (#145249)
+    — ``compression_exhausted`` on the latter would have the gateway wipe the session (#9893/#35809)."""
+    if isinstance(exc, PreflightCompressionDeferred):
+        return _preflight_deferred_result(agent, exc, conversation_history)
+    return _preflight_timeout_result(agent, exc, conversation_history)
+
+
+def _preflight_deferred_result(agent, exc, conversation_history) -> dict[str, Any]:
+    """No provider call was sent and the session is intact, so the turn ends as ``compression_deferred``."""
+    logger.info("Turn-start preflight deferred — ending turn with typed recovery result: %s", exc)
+    from agent.agent_runtime_helpers import note_turn_persisted
+    note_turn_persisted(agent)
+    result = _compression_deferred_result(agent, list(conversation_history or []), 0, reason="lock")
+    result["turn_exit_reason"] = "context_compression_deferred"
+    return result
+
+
 @dataclass
 class _LoopState:
     """Every local the turn loop threads through the phase helpers in ``agent/turn_*.py``.
@@ -1656,6 +1675,8 @@ def _run_conversation_turn(
     agent._hold_stream = bool(agent._held_transforms)
 
     # Per-turn setup: build_turn_context mutates ``agent`` and returns the locals the loop reads.
+    # The lock wait budget is per turn: a held summary waited out last turn must not disarm this one (#145249).
+    agent._compression_lock_waited = False
     try:
         _ctx = build_turn_context(
             agent, user_message, system_message, conversation_history, task_id,
@@ -1676,8 +1697,8 @@ def _run_conversation_turn(
             moa_active=bool(moa_config),
             title_user_message=title_user_message,
         )
-    except PreflightCompressionTimedOut as _preflight_timeout_exc:
-        return _preflight_timeout_result(agent, _preflight_timeout_exc, conversation_history)
+    except (PreflightCompressionTimedOut, PreflightCompressionDeferred) as _preflight_exc:
+        return _preflight_abort_result(agent, _preflight_exc, conversation_history)
     # Voice turns may run on auxiliary.voice_chat: bound after the prompt/row/compaction were settled
     # against the main model, undone in finalize_turn (and run_conversation's finally on early exits).
     from agent.voice_turn_route import begin_voice_turn_route
