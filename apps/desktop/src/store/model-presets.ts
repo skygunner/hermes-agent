@@ -169,6 +169,12 @@ export async function applyModelPreset(
         write = Promise.resolve(preceding)
           .catch(() => {})
           .then(async () => {
+            // Re-validate ownership at dispatch time: the session may have
+            // changed models since the write was queued, making this edit stale.
+            if (ctx.isCurrent?.(dimension) === false) {
+              pendingWrites.delete(key)
+              return
+            }
             await ctx.request('config.set', {
               key: dimension === 'effort' ? 'reasoning' : 'fast',
               session_id: ctx.sessionId,
