@@ -1739,6 +1739,14 @@ export const setCurrentReasoningEffort = (next: Updater<string>) => {
   $currentReasoningEffortWire.set('')
 }
 
+/** Update the displayed effort without persisting a user preference.
+
+    session.info for any viewed session reports that session's live effort;
+    persisting it would overwrite the user's picked effort for the next new
+    chat (#145299). User picks go through setCurrentReasoningEffort. */
+export const setCurrentReasoningEffortTransient = (next: Updater<string>) =>
+  updateAtom($currentReasoningEffort, next)
+
 /** The level the route actually sends for `$currentReasoningEffort`
  *  (`session.info.reasoning_effort_wire`): '' when unknown, equal when verbatim,
  *  weaker when the route clamps a Hermes-internal step such as `ultra`. Never
