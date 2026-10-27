@@ -54,6 +54,7 @@ BUZZ_PRIVATE_KEY=nsec1...
 | `BUZZ_CHANNELS` | — | Comma-separated channel UUIDs to watch (default: all joined channels) |
 | `BUZZ_HOME_CHANNEL` | — | Channel UUID for cron / notification delivery (defaults to the first watched channel) |
 | `BUZZ_ALLOWED_USERS` | — | Comma-separated npubs or hex pubkeys allowed to talk to the agent |
+| `BUZZ_BOT_USERS` | — | Comma-separated npubs or hex pubkeys classified as bots for `gateway.bot_loop_guard` (`bot_users` in config.yaml; grants no access) |
 | `BUZZ_ALLOW_ALL_USERS` | — | Allow any community member to talk to the agent |
 | `BUZZ_POLL_INTERVAL` | — | Seconds between inbound poll sweeps (default: 4) |
 | `BUZZ_CLI_PATH` | — | Path to the `buzz` binary (default: `buzz` on PATH, then `~/bin/buzz`) |
@@ -129,6 +130,25 @@ By default the allow-list is empty, which means every community member who menti
 The allow-list also gates **inbound attachments**: relay media is fetched with the agent's own Buzz credentials, so a download only happens for a sender the gateway explicitly authorizes. A denied, missing, or failed authorization leaves the message text untouched and makes no credentialed request.
 
 Cron jobs and notifications (`deliver=buzz`) are delivered to the **home channel** — `BUZZ_HOME_CHANNEL` if set, otherwise the first watched channel — and work even when cron runs outside the gateway process.
+
+## Bot-loop protection
+
+List known agent identities in `gateway.platforms.buzz.extra.bot_users` (a list of hex pubkeys or npubs), or `BUZZ_BOT_USERS` (comma-separated). The default is empty. The adapter normalizes these entries like `allowed_users` and marks matching inbound senders as bots. **Classification does not authorize a sender:** in a restricted setup, put each permitted bot in `allowed_users` as well. Existing allow-all and other gateway authorization rules remain unchanged.
+
+Bot settings use the same profile-scoped precedence as `allowed_users`; under multiplexing, a missing secondary-profile setting never inherits the process profile's `BUZZ_BOT_USERS`.
+
+Replies to the agent's own messages can count as addressed without an explicit mention, so mention gating alone does not prevent two allowed agents from looping. Classified bots use the existing `gateway.bot_loop_guard` budget. For example:
+
+```yaml
+gateway:
+  bot_loop_guard:
+    enabled: true
+    max_events: 6
+    window_seconds: 300
+    cooldown_seconds: 600
+```
+
+This admits six bot-authored messages per conversation within five minutes; the seventh starts a ten-minute cooldown. Human messages are not metered. The budget is shared by bots in the same receiving-profile/platform/chat, including its threads. There is no Buzz-specific budget override: these settings apply across platforms in the owning profile. Defaults are 20 events, 300 seconds, and a 600-second cooldown.
 
 ## Inbound attachments
 

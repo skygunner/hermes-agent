@@ -42,6 +42,10 @@ optional_env:
     description: "Comma-separated npubs or hex pubkeys allowed to talk to the agent"
     prompt: "Allowed users (comma-separated)"
     password: false
+  - name: BUZZ_BOT_USERS
+    description: "Comma-separated npubs or hex pubkeys classified as bots for gateway.bot_loop_guard (grants no access)"
+    prompt: "Bot users (comma-separated, or empty)"
+    password: false
   - name: BUZZ_ALLOW_ALL_USERS
     description: "Allow any community member to talk to the agent (true/false)"
     prompt: "Allow all users? (true/false)"

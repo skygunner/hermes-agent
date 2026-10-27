@@ -723,6 +723,7 @@ Connect Hermes to [Photon](https://photon.codes/) / Spectrum (iMessage and other
 | `BUZZ_CHANNELS` | Comma-separated channel UUIDs to watch (default: all joined channels) |
 | `BUZZ_HOME_CHANNEL` | Channel UUID for cron / notification delivery (defaults to the first watched channel) |
 | `BUZZ_ALLOWED_USERS` | Comma-separated npubs or hex pubkeys allowed to talk to the agent |
+| `BUZZ_BOT_USERS` | Comma-separated npubs or hex pubkeys classified as bots for `gateway.bot_loop_guard`; config: `gateway.platforms.buzz.extra.bot_users` (default: empty). Classification grants no access; configure `allowed_users` separately. |
 | `BUZZ_ALLOW_ALL_USERS` | Allow any community member to talk to the agent (`true`/`false`) |
 | `BUZZ_TRANSPORT` | Inbound transport: `auto` (WebSocket w/ poll fallback, default), `websocket`, or `poll` |
 | `BUZZ_POLL_INTERVAL` | Seconds between inbound poll sweeps (default: `4`) |

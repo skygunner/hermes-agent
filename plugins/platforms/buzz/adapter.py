@@ -545,6 +545,8 @@ class BuzzAdapter(BuzzCursorMixin, BasePlatformAdapter):
         # Entries may be hex or npub (normalized to hex). Reaction-only identities get a 👀 on explicit tags but
         # never dispatch; allowed_users wins on overlap.
         self._allowed_pubkeys: set = _pubkey_set(_setting_or("BUZZ_ALLOWED_USERS", extra, "allowed_users", []))
+        # Classification only; bot identities still need ordinary authorization.
+        self._bot_pubkeys: set = _pubkey_set(_setting_or("BUZZ_BOT_USERS", extra, "bot_users", []))
         self._reaction_only_pubkeys: set = _pubkey_set(_setting_or("BUZZ_REACTION_ONLY_USERS", extra, "reaction_only_users", []))
         # Secret — resolved lazily (never at import time, never logged); connect() re-resolves.
         self._private_key = self._auth_tag = ""
@@ -1744,6 +1746,7 @@ class BuzzAdapter(BuzzCursorMixin, BasePlatformAdapter):
         source = self.build_source(
             chat_id=chat_id, chat_name=self._channel_names.get(chat_id, chat_id), chat_type=chat_type,
             user_id=user_id, user_name=user_name, thread_id=thread_id, message_id=message_id,
+            is_bot=user_id in self._bot_pubkeys,
         )
         event = MessageEvent(
             text=text, message_type=message_type, source=source, raw_message=raw_message, message_id=message_id,
@@ -1817,6 +1820,7 @@ _YAML_BRIDGE = (  # (extra key, env var, kind) for apply_yaml_bridge
     ("home_channel", "BUZZ_HOME_CHANNEL", "str"), ("transport", "BUZZ_TRANSPORT", "str"),
     ("poll_interval", "BUZZ_POLL_INTERVAL", "str"),
     ("channels", "BUZZ_CHANNELS", "csv"), ("allowed_users", "BUZZ_ALLOWED_USERS", "csv"),
+    ("bot_users", "BUZZ_BOT_USERS", "csv"),
     ("reaction_only_users", "BUZZ_REACTION_ONLY_USERS", "csv"), ("allow_all_users", "BUZZ_ALLOW_ALL_USERS", "lower"),
     ("require_mention", "BUZZ_REQUIRE_MENTION", "lower"), ("reply_in_thread", "BUZZ_REPLY_IN_THREAD", "lower"),
     ("reply_to_mode", "BUZZ_REPLY_TO_MODE", "lower"),
