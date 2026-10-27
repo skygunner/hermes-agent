@@ -13,6 +13,12 @@ The fix keys on the provider contract violation itself
 bounded to 3 consecutive stalls, with the budget resetting after any
 successful tool round so it guards each stall rather than the whole run. A
 genuine ``finish_reason="stop"`` text turn is unaffected.
+
+Regression for #143040: the same contract violation is also reported by
+providers that DID finish the turn (the visible answer shipped, only the
+finish_reason lies). Re-prompting that answer discards it and a compliant
+model then fabricates no-op tool calls to fill the re-opened turn, so the
+recovery only applies to a response with no visible text at all.
 """
 
 from __future__ import annotations
@@ -66,15 +72,29 @@ def _dropped_tool_call_response(content: str):
     )
 
 
+def _request_messages(call) -> list:
+    return call.kwargs.get("messages") or call.args[0].get("messages")
+
+
+def _nudge_rows_sent(agent) -> int:
+    """How many dropped-tool-call nudge rows the model saw on its last request."""
+    from agent.conversation_loop import _DROPPED_TOOLCALL_NUDGE_CONTENT
+    last = _request_messages(agent.client.chat.completions.create.call_args_list[-1])
+    return sum(
+        1 for m in last
+        if m.get("role") == "user" and m.get("content") == _DROPPED_TOOLCALL_NUDGE_CONTENT
+    )
+
+
 class TestDroppedToolCallRecovery:
     def test_dropped_tool_call_reprompts_instead_of_exiting(self, loop_agent):
-        """finish_reason=tool_calls with an empty tool_calls array must
-        re-prompt the model to emit the call rather than exiting the loop
-        with the narration as the final answer."""
+        """finish_reason=tool_calls with an empty tool_calls array and no
+        visible text must re-prompt the model to emit the call rather than
+        exiting the loop with nothing delivered."""
         from tests.agent.test_run_agent import _mock_response
 
         loop_agent.client.chat.completions.create.side_effect = [
-            _dropped_tool_call_response("Let me verify the PR and gather evidence."),
+            _dropped_tool_call_response(""),
             _mock_response(content="All checks pass. Approved.", finish_reason="stop"),
         ]
 
@@ -93,7 +113,7 @@ class TestDroppedToolCallRecovery:
         # The loop must have injected a nudge user-message telling the model to
         # issue the actual tool call.
         second_call = loop_agent.client.chat.completions.create.call_args_list[1]
-        msgs = second_call.kwargs.get("messages") or second_call.args[0].get("messages")
+        msgs = _request_messages(second_call)
         last_user = next(
             (m for m in reversed(msgs) if m.get("role") == "user"), None,
         )
@@ -125,31 +145,57 @@ class TestDroppedToolCallRecovery:
         )
         assert "Here is your answer." in result["final_response"]
 
-    def test_persistent_dropped_tool_calls_are_bounded(self, loop_agent):
-        """If the model never emits a call, the recovery must give up after a
-        bounded number of consecutive stalls instead of looping forever."""
-        from tests.agent.test_run_agent import _mock_response
+    def test_answer_with_dropped_tool_call_finish_is_delivered(self, loop_agent):
+        """Regression for #143040: a response that carries the visible answer
+        but reports finish_reason=tool_calls with no calls has finished the
+        turn. Re-prompting it throws the answer away and the model answers the
+        nudge with fabricated no-op tool calls, so the turn must end here."""
+        answer = "The migration is finished. Nothing left to run — waiting for your review."
 
-        # Stage plenty of dropped-tool-call responses followed by a clean stop,
-        # so that if the bound is respected the loop exits on its own well
-        # before exhausting the staged responses (no StopIteration).
         loop_agent.client.chat.completions.create.side_effect = [
-            _dropped_tool_call_response("Let me check.") for _ in range(9)
-        ] + [_mock_response(content="done", finish_reason="stop")]
+            _dropped_tool_call_response(answer),
+        ]
 
         with (
             patch.object(loop_agent, "_persist_session"),
             patch.object(loop_agent, "_save_trajectory"),
             patch.object(loop_agent, "_cleanup_task_resources"),
         ):
+            result = loop_agent.run_conversation("finish the migration")
+
+        assert loop_agent.client.chat.completions.create.call_count == 1, (
+            "A visible answer must end the turn, not be re-opened by a nudge."
+        )
+        assert result["completed"] is True
+        assert result["final_response"] == answer
+
+    def test_persistent_dropped_tool_calls_are_bounded(self, loop_agent):
+        """If the model never emits a call, the recovery must give up after a
+        bounded number of consecutive stalls instead of looping forever."""
+        from tests.agent.test_run_agent import _mock_response
+
+        # Four empty dropped-tool-call responses then a clean stop: the first
+        # three exhaust the nudge bound, the fourth must fall to the empty-
+        # response ladder instead of nudging again.
+        loop_agent.client.chat.completions.create.side_effect = [
+            _dropped_tool_call_response("") for _ in range(4)
+        ] + [_mock_response(content="done", finish_reason="stop")]
+
+        with (
+            patch.object(loop_agent, "_persist_session"),
+            patch.object(loop_agent, "_save_trajectory"),
+            patch.object(loop_agent, "_cleanup_task_resources"),
+            # Past the bound the empty-response ladder owns the blank reply; its
+            # paid backoff wait is not what this test measures.
+            patch("agent.turn_empty_response.interruptible_backoff_sleep", return_value=None),
+        ):
             result = loop_agent.run_conversation("review the PR")
 
-        # 1 initial call + at most 3 bounded re-prompts = 4 total before the
-        # guard stops firing. It must NOT consume all 9 staged stalls.
-        assert loop_agent.client.chat.completions.create.call_count <= 4, (
-            "Consecutive dropped tool calls must be bounded (no infinite loop)."
+        assert _nudge_rows_sent(loop_agent) == 3, (
+            "Consecutive dropped tool calls must be bounded to 3 re-prompts."
         )
-        assert result is not None
+        assert result["completed"] is True
+        assert "done" in result["final_response"]
 
     def test_nudge_pair_is_ephemeral_scaffolding(self, loop_agent):
         """The re-prompt pair (interim assistant turn + synthetic user nudge)
@@ -161,7 +207,7 @@ class TestDroppedToolCallRecovery:
         from tests.agent.test_run_agent import _mock_response
 
         loop_agent.client.chat.completions.create.side_effect = [
-            _dropped_tool_call_response("Let me verify the PR."),
+            _dropped_tool_call_response(""),
             _mock_response(content="All checks pass. Approved.", finish_reason="stop"),
         ]
 
@@ -191,4 +237,3 @@ class TestDroppedToolCallRecovery:
             "_dropped_toolcall_nudge messages must be classified as "
             "ephemeral scaffolding so they are never persisted."
         )
-

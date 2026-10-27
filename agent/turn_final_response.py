@@ -1,6 +1,6 @@
-"""No-tool-call (final text) branch of the conversation turn loop: empty/think-only recovery,
-intent-ack / stall-guard continuation, length-continuation joining, dropped-tool-call
-re-prompt, scaffolding pop, stop gates, then the durable final flush. Extracted from
+"""No-tool-call (final text) branch of the conversation turn loop: empty/think-only recovery
+(including the dropped-tool-call re-prompt), intent-ack / stall-guard continuation,
+length-continuation joining, scaffolding pop, stop gates, then the durable final flush. Extracted from
 ``run_conversation``; nothing here imports ``agent.conversation_loop`` at module level
 (cycle) — loop-internal nudge constants resolve lazily.
 """
@@ -68,6 +68,57 @@ def _absorb_continuation_fragments(final_response: Any, parts: Any, messages: An
     return _join_truncated_parts([*parts, (final_response, False)]), True
 
 
+def _reprompt_dropped_tool_call(
+    agent: Any, assistant_message: Any, finish_reason: Any, messages: list,
+) -> bool:
+    """Re-prompt a response that claimed a tool call but shipped nothing; True when it nudged.
+
+    Only a reply with nothing at all to send is a dropped call — visible text is the turn's
+    answer, and reasoning (structured or inline ``<think>``) is a plan the empty ladder prefills
+    instead. Nudging a finished turn re-opens it, and a compliant model then fabricates no-op
+    calls to fill it (#143040).
+    """
+    from agent.conversation_loop import _DROPPED_TOOLCALL_NUDGE_CONTENT
+    from agent.turn_empty_response import _INLINE_THINK_RE
+
+    if finish_reason != "tool_calls" or assistant_message.tool_calls:
+        return False
+    if (
+        getattr(assistant_message, "reasoning", None)
+        or getattr(assistant_message, "reasoning_content", None)
+        or getattr(assistant_message, "reasoning_details", None)
+        or _INLINE_THINK_RE.search(assistant_message.content or "")
+    ):
+        return False
+    if getattr(agent, "_dropped_toolcall_retries", 0) >= 3:
+        return False
+    agent._dropped_toolcall_retries = getattr(agent, "_dropped_toolcall_retries", 0) + 1
+    logger.warning(
+        "finish_reason=tool_calls with empty tool_calls array "
+        "(no visible text) — re-prompting to emit the call "
+        "(retry %d/3, model=%s provider=%s)",
+        agent._dropped_toolcall_retries, agent.model, agent.provider,
+    )
+    agent._emit_diagnostic_status(
+        "↻ Model signaled a tool call but sent none — "
+        f"re-prompting ({agent._dropped_toolcall_retries}/3)"
+    )
+    # Both halves of the re-prompt pair are ephemeral scaffolding: never persisted,
+    # and the finalization pop strips an unanswered tail pair.
+    interim_msg = agent._build_assistant_message(assistant_message, finish_reason)
+    interim_msg["content"] = "(empty)"
+    interim_msg["_empty_recovery_synthetic"] = True
+    interim_msg["_dropped_toolcall_nudge"] = True
+    append_message(messages, interim_msg)
+    append_message(messages, {
+        "role": "user",
+        "content": _DROPPED_TOOLCALL_NUDGE_CONTENT,
+        "_dropped_toolcall_nudge": True,
+    })
+    agent._session_messages = messages
+    return True
+
+
 def finish_text_response(
     agent: Any, *, assistant_message: Any, response: Any, finish_reason: Any, messages: Any,
     api_messages: Any, conversation_history: Any, api_call_count: Any, user_message: Any,
@@ -81,9 +132,7 @@ def finish_text_response(
     continuation path sets ``final_response = None`` so an acknowledgment never suppresses
     iteration-limit summarization; the final message is appended and flushed only after the
     stop gates accept it."""
-    from agent.conversation_loop import (
-        _CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE, _DROPPED_TOOLCALL_NUDGE_CONTENT,
-    )
+    from agent.conversation_loop import _CODEX_ACK_CONTINUATION_NUDGE, _DEGENERATE_FINAL_NUDGE
 
     def _verdict(action: str, result: Optional[dict[str, Any]] = None) -> FinalResponseVerdict:
         return FinalResponseVerdict(
@@ -143,6 +192,10 @@ def finish_text_response(
 
     # Think-block-only / empty content: recovery path.
     if not agent._has_content_after_think_block(final_response):
+        if _reprompt_dropped_tool_call(agent, assistant_message, finish_reason, messages):
+            final_response = None
+            return _verdict("continue")
+
         _ev = recover_empty_response(
             agent, assistant_message, response, finish_reason, final_response=final_response,
             messages=messages, api_messages=api_messages, conversation_history=conversation_history,
@@ -294,38 +347,7 @@ def finish_text_response(
         # real reply; ``build_api_messages`` substitutes ``api_content`` on the wire.
         final_msg["api_content"] = final_response
 
-    # Dropped tool-call recovery (seen with Claude via gateways): finish_reason="tool_calls" with empty
-    # tool_calls would end the turn unstarted; re-prompt (max 3 CONSECUTIVE stalls).
-    if (
-        finish_reason == "tool_calls"
-        and not assistant_message.tool_calls
-        and getattr(agent, "_dropped_toolcall_retries", 0) < 3
-    ):
-        agent._dropped_toolcall_retries = getattr(agent, "_dropped_toolcall_retries", 0) + 1
-        logger.warning(
-            "finish_reason=tool_calls with empty tool_calls array "
-            "(narration only) — re-prompting to emit the call "
-            "(retry %d/3, model=%s provider=%s)",
-            agent._dropped_toolcall_retries, agent.model, agent.provider,
-        )
-        agent._emit_diagnostic_status(
-            "↻ Model signaled a tool call but sent none — "
-            f"re-prompting ({agent._dropped_toolcall_retries}/3)"
-        )
-        # Both halves of the re-prompt pair are ephemeral scaffolding: never persisted,
-        # and the finalization pop strips an unanswered tail pair.
-        final_msg["_dropped_toolcall_nudge"] = True
-        append_message(messages, final_msg)
-        append_message(messages, {
-            "role": "user",
-            "content": _DROPPED_TOOLCALL_NUDGE_CONTENT,
-            "_dropped_toolcall_nudge": True,
-        })
-        agent._session_messages = messages
-        final_response = None
-        return _verdict("continue")
-
-    # Genuine turn end (no dropped-tool-call mismatch): clear stall budget.
+    # Genuine turn end (a visible answer, whatever finish_reason claims): clear stall budget.
     agent._dropped_toolcall_retries = 0
 
     # Pop prefill / empty-retry scaffolding before the final response or
