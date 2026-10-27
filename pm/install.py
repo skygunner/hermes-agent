@@ -597,7 +597,17 @@ def ensure(
     if missing:
         store = _operation.lock() if _operation is not None else Store(paths.writable_store_root())
         facts = _facts() if store.root == _store().root else Facts(store.root / "facts.json")
+        # Re-verify under the install lock: another profile may have completed this
+        # install while this caller waited for the lock; its facts write is invisible
+        # to the pre-lock check above (#144784 — repeated download prompts).
+        still_missing = []
         for package in missing:
+            location = _installed_location(package, lockfile, target, verify=explicit and verify)
+            if location is None:
+                still_missing.append(package)
+            else:
+                _refresh_found_env(package, location, target, _operation)
+        for package in still_missing:
             # Publication may change entries; do not carry observations across it.
             checked.clear()
             _install(package, lockfile, facts, store, target, progress=progress,
