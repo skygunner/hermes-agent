@@ -201,22 +201,29 @@ When it pauses, `repl` → inspect `props`, state refs, `useInput` handler value
 
 ### Debugging a running `hermes --tui`
 
-The TUI spawns Node from the Python CLI. Easiest path:
+The TUI spawns Node from the Python CLI. `pgrep -f 'ui-tui/dist/entry'` matches every
+TUI process on the host, so never SIGUSR1 the first match blindly — bind the
+inspector to YOUR own launch instead:
 
 ```bash
-# 1. Launch TUI
+# 1. Launch the TUI under the inspector from the start (preferred)
+node --inspect-brk <hermes-agent-repo>/ui-tui/dist/entry.js
+# In another terminal:
+node inspect -p <node pid>
+
+# 2. Or, if the TUI is already running, record its PID at launch and verify it
+#    is one of the targets on port 9229 before attaching:
 hermes --tui &
-TUI_PID=$(pgrep -f 'ui-tui/dist/entry' | head -1)
-
-# 2. Enable inspector on that Node PID
-kill -SIGUSR1 "$TUI_PID"
-
-# 3. Find the WS URL
-curl -s http://127.0.0.1:9229/json/list | jq -r '.[0].webSocketDebuggerUrl'
-
-# 4. Attach
-node inspect ws://127.0.0.1:9229/<uuid>
+TUI_PID=$!
+curl -s http://127.0.0.1:9229/json/list | jq -r '.[].webSocketDebuggerUrl'
+node inspect -p "$TUI_PID"
 ```
+
+`/json/list` enumerates every inspectable target on the host (often more than
+one), so match the target to your own PID before attaching — do not assume
+`.[0]` is yours. The supported attach forms are `node inspect -p <pid>` or
+`node inspect <host>:<port>`; `node inspect ws://.../<uuid>` is not accepted
+by the inspector CLI.
 
 Interacting with the TUI (typing in its window) continues to advance execution; your debugger can pause it on a breakpoint at any `sb(...)`.
 
