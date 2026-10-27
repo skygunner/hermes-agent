@@ -8,6 +8,46 @@ import re
 import subprocess
 import sys
 import time
+import contextlib
+
+# Mirror of hermes_cli/main_dashboard.py:_UpdateOutputStream for the takeover child.
+class _UpdateOutputStream:
+    """stdout/stderr wrapper for ``hermes update`` takeover: mirrors to ``logs/update.log``."""
+
+    _BROKEN = (BrokenPipeError, OSError, ValueError)
+
+    def __init__(self, original, log_file):
+        self._original = original
+        self._log = log_file
+        self._original_broken = False
+
+    def write(self, data):
+        if self._log is not None:
+            with contextlib.suppress(Exception):
+                self._log.write(data)
+        if not self._original_broken:
+            try:
+                return self._original.write(data)
+            except self._BROKEN:
+                self._original_broken = True
+        return len(data) if isinstance(data, (str, bytes)) else 0
+
+    def flush(self):
+        if self._log is not None:
+            with contextlib.suppress(Exception):
+                self._log.flush()
+        if self._original_broken:
+            return
+        try:
+            self._original.flush()
+        except self._BROKEN:
+            self._original_broken = True
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+    def fileno(self):
+        return self._original.fileno()
 
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
@@ -135,6 +175,25 @@ def main() -> int:
     context, result = map(Path, sys.argv[1:3])
     request = json.loads(context.read_text(encoding="utf-8-sig"))
     sys.path.insert(0, request["root"])
+
+    # Mirror stdout/stderr to update.log (same as parent hermes update) so the
+    # takeover/finish child's output is persisted. The log lives at the root
+    # home's logs/ directory (not the profile's), matching _install_hangup_protection.
+    log_file = None
+    try:
+        from hermes_constants import get_default_hermes_root
+        logs_dir = get_default_hermes_root() / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_file = open(logs_dir / "update.log", "a", buffering=1, encoding="utf-8")
+        import datetime as _dt
+        log_file.write(f"\n=== hermes update takeover {_dt.datetime.now().isoformat(timespec='seconds')} ===\n")
+        import contextlib
+        sys.stdout = _UpdateOutputStream(sys.stdout, log_file)
+        sys.stderr = _UpdateOutputStream(sys.stderr, log_file)
+    except Exception:  # health: allow BLE001 -- mirror setup failure is non-fatal; we continue without mirror
+        log_file = None
+        # Non-fatal: if mirror fails, we still run without it
+
     if "stopped_serves" in request:
         # Historical atexit cleanup may run after the update's result is fixed.
         # It must reuse that installation, never start a second update/repair.
@@ -151,6 +210,7 @@ def main() -> int:
              str(context), str(result)], cwd=root, env=activation_environment(root),
              check=False,
         ).returncode
+
     from hermes_cli import update_receipt
     from hermes_cli.update_lock import UpdateLock, describe_holder
 
@@ -169,7 +229,16 @@ def main() -> int:
             request["receipt"] = update_receipt._current.get().data
             context.write_text(json.dumps(request), encoding="utf-8")
         except Exception as exc:  # health: allow BLE001 -- pre-commit boundary: any preparation failure is the takeover's recorded failure
-            print(f"Update preparation failed: {exc}", file=sys.stderr, flush=True)
+            # If the completion tail was already armed (prepare() calls arm_completion), the failure
+            # is in the PM sync phase, not a total loss — the armed tail finishes the update on next launch.
+            root = Path(request["root"])
+            from pm.environments import install_state_dir
+            tail_armed = install_state_dir(root).joinpath("source-completion-pending").is_file()
+            if tail_armed:
+                print("  pm worker failed; a completion tail is armed — the update finishes on next launch; watch logs/update.log",
+                      file=sys.stderr, flush=True)
+            else:
+                print(f"Update preparation failed: {exc}", file=sys.stderr, flush=True)
             _record_failure(request, result, 1, f"historical takeover preparation failed: {exc}")
             return 1
         try:
