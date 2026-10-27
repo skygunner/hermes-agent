@@ -280,7 +280,10 @@ def _stage_session_file_attachment(
     ``_ATTACHMENT_MAX_BYTES``."""
     workspace = Path(_session_cwd(session)).resolve()
     resolved = None
-    if raw_path:
+    # ``data_url`` rides a path the gateway cannot see (a remote desktop front), so its bytes are
+    # the attachment: resolving the path first would stage the gateway's own same-named file
+    # instead of what the user picked (#142876).
+    if raw_path and not data_url:
         try:
             from cli import _detect_file_drop, _resolve_attachment_path, _split_path_input
         except Exception:

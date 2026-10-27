@@ -168,6 +168,34 @@ def test_cross_session_attached_images_allocate_unique_paths(sessions, tmp_path)
 
 
 
+def test_uploaded_bytes_win_over_a_gateway_file_at_the_same_path(sessions, tmp_path, monkeypatch):
+    """A remote desktop front sends the bytes inline beside the client's path, which the gateway
+    may also hold under that name. The bytes the user picked are the attachment."""
+    import sys
+    import types
+
+    source = tmp_path / "downloads" / "report.md"
+    source.parent.mkdir()
+    source.write_text("OLD", encoding="utf-8")
+    fake_cli = types.ModuleType("cli")
+    fake_cli._detect_file_drop = lambda raw: None
+    fake_cli._split_path_input = lambda raw: (raw, "")
+    fake_cli._resolve_attachment_path = lambda raw: source
+    monkeypatch.setitem(sys.modules, "cli", fake_cli)
+
+    response = server._methods["file.attach"](1, {
+        "session_id": "first",
+        "path": str(source),
+        "data_url": "data:text/plain;base64," + base64.b64encode(b"NEW").decode(),
+    })
+
+    assert "error" not in response, response
+    stored = Path(response["result"]["path"])
+    assert stored.parent == (tmp_path / "profile" / "attachments").resolve()
+    assert stored.read_bytes() == b"NEW"
+    assert response["result"]["uploaded"] is True
+
+
 def test_upload_never_writes_through_a_planted_symlink(sessions, tmp_path):
     """A repo-shipped dangling symlink at the candidate name must not redirect the upload."""
     root = tmp_path / "profile" / "attachments"
