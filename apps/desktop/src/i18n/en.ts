@@ -776,6 +776,8 @@ export const en: Translations = {
       reveal: 'Reveal in file manager',
       enable: 'Enable',
       disable: 'Disable',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
       failed: 'failed',
       kinds: { bundled: 'bundled', disk: 'on disk', runtime: 'runtime' },
       installModal: {
