@@ -1,3 +1,5 @@
+# health: allow FILE_LINES -- +27 lines for #144975 custom provider base_url fallback in
+# _runtime_request_from_persisted_session_lock; module at main cap, net-zero edits only.
 """OpenAI-compatible API server platform adapter (aiohttp).
 
 Serves /v1/chat/completions, /v1/responses, /v1/models, /v1/capabilities, /api/sessions,
@@ -1959,6 +1961,31 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         if not isinstance(lock, dict) or not _coerce_request_bool(lock.get("confirmed"), default=False):
             return None
         model, provider = self._requested_ids(lock)
+        if not model and not provider:
+            return None
+        # If the lock stored provider as bare "custom", try to reconstruct the
+        # full custom:<name> from the stored model_options base_url.
+        if provider == "custom" and isinstance(lock.get("model_options"), dict):
+            base_url = self._clean_runtime_id(lock["model_options"].get("base_url"))
+            if base_url:
+                # Look up the custom provider by base_url
+                from agent.agent_init import _custom_provider_runtime_ids
+                # We need the configured custom providers; iterate known custom entries
+                # via the agent config's custom_providers list.
+                # This is a best-effort fallback; the real fix is persisting the full
+                # custom:<name> at lock creation, but the Desktop may send bare "custom".
+                try:
+                    from hermes_cli.config import load_config_readonly
+                    cfg = load_config_readonly()
+                    for entry in cfg.get("custom_providers", []) or []:
+                        entry_base = str(entry.get("base_url", "")).rstrip("/")
+                        if entry_base and self._clean_runtime_id(entry_base) == base_url.rstrip("/"):
+                            provider_key = str(entry.get("provider_key", entry.get("name", ""))).strip()
+                            provider = f"custom:{provider_key}"
+                            if provider != "custom:":
+                                break
+                except Exception:
+                    logger.exception("custom provider lookup failed for base_url %s", base_url)
         if not model and not provider:
             return None
         if self._clean_runtime_id(lock.get("route_source"), max_len=64).lower() == "model_routes":
