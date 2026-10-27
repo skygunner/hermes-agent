@@ -132,6 +132,38 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         self._private_api_enabled: Optional[bool] = None
         self._helper_connected: bool = False
         self._guid_cache: OrderedDict[str, str] = OrderedDict()
+        # Debounce state for merging text+attachment events from the same iMessage
+        self._bluebubble_pending: dict[str, MessageEvent] = {}
+        self._bluebubble_tasks: dict[str, asyncio.Task] = {}
+        self.BLUEBUBBLES_WAIT_SECONDS = 1.0
+
+    async def _flush_bluebubbles_buffered(self, key: str) -> None:
+        """Debounce-flush BlueBubbles events for a chat_guid: wait, merge, then dispatch once.
+        Mirrors Telegram's _flush_buffered but simplified for BlueBubbles' text+attachment pairing."""
+        current_task = asyncio.current_task()
+        event = None
+        try:
+            await asyncio.sleep(self.BLUEBUBBLES_WAIT_SECONDS)
+            # Superseded flush: another event re-armed the timer while we slept
+            owner = self._bluebubble_tasks.get(key)
+            if owner is not None and owner is not current_task:
+                return
+            event = self._bluebubble_pending.pop(key, None)
+            if not event:
+                return
+            self._bluebubble_tasks.pop(key, None)
+            logger.info("[bluebubbles] Flushing debounced event for %s (text=%d, media=%d)",
+                        key, len(event.text or ""), len(event.media_urls))
+            await self.handle_message(event)
+            event = None
+        except asyncio.CancelledError:
+            if event is not None:
+                # Re-hold the event so it can be redispatched after reconnect
+                self._bluebubble_pending[key] = event
+            raise
+        finally:
+            if self._bluebubble_tasks.get(key) is current_task:
+                self._bluebubble_tasks.pop(key, None)
 
     # --- API helpers ---
 
@@ -605,9 +637,38 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             message_id=self._value(record.get("guid"), record.get("messageGuid"), record.get("id")),
             reply_to_message_id=self._value(record.get("threadOriginatorGuid"), record.get("associatedMessageGuid")),
             media_urls=media_urls, media_types=media_types)
-        task = asyncio.create_task(self.handle_message(event))
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        # Debounce by chat_guid: BlueBubbles sends text and attachment as separate events
+        # for the same iMessage. Only queue text-only events; media events flush immediately.
+        key = chat_guid or session_chat_id
+        if not media_urls:
+            # Text-only event: queue it, wait for potential media follow-up
+            existing = self._bluebubble_pending.get(key)
+            if existing is None:
+                self._bluebubble_pending[key] = event
+            else:
+                existing.media_urls.extend(event.media_urls)
+                existing.media_types.extend(event.media_types)
+                if event.text and event.text != "(attachment)":
+                    existing.text = event.text
+            prior_task = self._bluebubble_tasks.get(key)
+            if prior_task and not prior_task.done():
+                prior_task.cancel()
+            self._bluebubble_tasks[key] = asyncio.create_task(self._flush_bluebubbles_buffered(key))
+        else:
+            # Event has media: if there's a pending text-only event, merge and flush now;
+            # otherwise process immediately.
+            existing = self._bluebubble_pending.pop(key, None)
+            if existing is not None:
+                existing.media_urls.extend(event.media_urls)
+                existing.media_types.extend(event.media_types)
+                if event.text and event.text != "(attachment)":
+                    existing.text = event.text
+                event = existing
+                # Cancel pending flush since we're flushing now
+                prior_task = self._bluebubble_tasks.pop(key, None)
+                if prior_task and not prior_task.done():
+                    prior_task.cancel()
+            await self.handle_message(event)
         if self.send_read_receipts and session_chat_id:  # fire-and-forget read receipt
             asyncio.create_task(self.mark_read(session_chat_id))
         return _ok()
