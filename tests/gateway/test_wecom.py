@@ -1319,3 +1319,46 @@ async def test_oversized_cron_output_is_sent_as_successive_markdown_replies():
     adapter._send_request.assert_not_awaited()
     # Each chunk is its own queued send, so each draws a token from the 30 msgs/min bucket.
     assert adapter._get_token_usage("group-1")["normal"] == len(sent)
+
+
+class TestInboundVideoVoiceMedia:
+    """Regression #142806: a video/voice inbound message produced no media refs at all, so the
+    attachment was silently dropped before `_cache_media` ever saw it."""
+
+    @staticmethod
+    def _mixin():
+        from plugins.platforms.wecom.media import WeComMediaMixin
+
+        return WeComMediaMixin()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("msgtype", ["video", "voice"])
+    async def test_message_yields_a_media_ref(self, msgtype):
+        seen = []
+
+        async def fake_cache_media(kind, media):
+            seen.append((kind, media))
+            return ("/tmp/" + kind + ".bin", "application/octet-stream")
+
+        mixin = self._mixin()
+        mixin._cache_media = fake_cache_media
+        body = {"msgtype": msgtype, msgtype: {"url": "https://cdn/" + msgtype, "media_id": "m1"}}
+
+        paths, _mimes = await mixin._extract_media(body)
+
+        assert paths, msgtype
+        assert seen == [(msgtype, body[msgtype])]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("msgtype", ["video", "voice"])
+    async def test_quoted_item_yields_a_media_ref(self, msgtype):
+        async def fake_cache_media(kind, media):
+            return ("/tmp/q.bin", "application/octet-stream")
+
+        mixin = self._mixin()
+        mixin._cache_media = fake_cache_media
+        body = {"msgtype": "text", "quote": {"msgtype": msgtype, msgtype: {"url": "https://c/q"}}}
+
+        paths, _mimes = await mixin._extract_media(body)
+
+        assert paths, msgtype

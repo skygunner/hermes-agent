@@ -75,13 +75,13 @@ class WeComMediaMixin:
                     _ref("image", item)
         else:
             _ref("image", body)
-            if msgtype == "file":
-                _ref("file", body)
+            if msgtype in ("file", "video", "voice"):
+                _ref(msgtype, body)
             if msgtype == "appmsg" and isinstance(body.get("appmsg"), dict):  # AI Bot attachments (PDF/Word/Excel)
                 _ref("file", body["appmsg"]) or _ref("image", body["appmsg"])
         quote = _dict_at(body, "quote")
         quote_type = str(quote.get("msgtype") or "").lower()
-        if quote_type in ("image", "file"):
+        if quote_type in ("image", "file", "video", "voice"):
             _ref(quote_type, quote)
         cached = [c for c in [await self._cache_media(kind, ref) for kind, ref in refs] if c]
         return [c[0] for c in cached], [c[1] for c in cached]
