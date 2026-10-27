@@ -942,3 +942,23 @@ describe('row speed chip gating', () => {
     expect(paramRow.textContent).not.toContain('Fast')
   })
 })
+
+// A starred model lives only in the Favorites section at the top (it is removed from its
+// provider group), so a menu that opens scrolled to the current row makes the star look
+// gone (#144996): with favorites the menu must open at the top instead.
+describe('opening position with favorites', () => {
+  it('opens at the top when favorites exist; opens on the current row without them', async () => {
+    $favoriteModels.set([favoriteModelKey('google', 'gemini-3.1-pro')])
+    renderMenu({ model: 'gemini-2.5-flash', provider: 'google' })
+
+    await screen.findByText('Gemini 2.5')
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    cleanup()
+
+    $favoriteModels.set([])
+    renderMenu({ model: 'gemini-2.5-flash', provider: 'google' })
+
+    await screen.findByText('Gemini 2.5')
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  })
+})
