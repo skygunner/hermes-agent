@@ -95,8 +95,10 @@ SMOKE_WORKFLOW = {
           "inputs": {"text": "test", "clip": ["4", 1]}},
     "7": {"class_type": "CLIPTextEncode",
           "inputs": {"text": "", "clip": ["4", 1]}},
+    "8": {"class_type": "VAEDecode",
+          "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
     "9": {"class_type": "SaveImage",
-          "inputs": {"filename_prefix": "smoke", "images": ["3", 0]}},
+          "inputs": {"filename_prefix": "smoke", "images": ["8", 0]}},
 }
 
 

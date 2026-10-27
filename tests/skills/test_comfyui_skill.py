@@ -328,3 +328,29 @@ def test_run_cmd_redacts_supplied_token_from_output(monkeypatch):
     _record_subprocess(monkeypatch, mod, stdout=f"using token {secret}")
     _code, out = mod.run_cmd(["comfy"], env_overlay={"HF_API_TOKEN": secret})
     assert secret not in out
+
+
+def test_comfyui_smoke_workflow_has_vaedecode():
+    """ComfyUI smoke workflow must decode LATENT before SaveImage (regression #145136).
+
+    KSampler outputs LATENT, SaveImage requires IMAGE. The smoke workflow must
+    insert a VAEDecode node between them; otherwise ComfyUI validation rejects
+    the graph and the smoke test always reports a failed submission.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "comfyui_health_check", SCRIPTS / "health_check.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    wf = mod.SMOKE_WORKFLOW
+    assert "8" in wf, "VAEDecode node id '8' missing from SMOKE_WORKFLOW"
+    vae = wf["8"]
+    assert vae.get("class_type") == "VAEDecode", "node 8 is not VAEDecode"
+    assert vae.get("inputs", {}).get("samples") == ["3", 0], "VAEDecode samples must come from KSampler [3,0]"
+    assert vae.get("inputs", {}).get("vae") == ["4", 2], "VAEDecode VAE must come from CheckpointLoaderSimple [4,2]"
+    save = wf.get("9", {})
+    assert save.get("class_type") == "SaveImage", "node 9 is not SaveImage"
+    assert save.get("inputs", {}).get("images") == ["8", 0], "SaveImage images must come from VAEDecode [8,0]"
+    # Explicitly ensure SaveImage is not wired directly to KSampler LATENT.
+    assert save.get("inputs", {}).get("images") != ["3", 0], "SaveImage must not be wired directly to KSampler LATENT"
