@@ -102,7 +102,14 @@ def _history_dict_text(content: dict, *, image_urls: bool) -> str:
 
 def _content_display_text(content: Any) -> str:
     if isinstance(content, list):
-        return "\n".join(t for t in (_content_display_text(part).strip() for part in content) if t)
+        chunks: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].lstrip().startswith("[System:"):
+                continue
+            t = _content_display_text(part).strip()
+            if t:
+                chunks.append(t)
+        return "\n".join(chunks)
     if isinstance(content, dict):
         return _history_dict_text(content, image_urls=False)
     return "" if content is None else str(content)
@@ -117,8 +124,14 @@ def _coerce_message_text(content: Any, *, image_urls: bool = True) -> str:
     if isinstance(content, list):
         chunks: list[str] = []
         for part in content:
-            if isinstance(part, str) or (isinstance(part, dict) and isinstance(part.get("text"), str)):
-                chunks.append(part if isinstance(part, str) else part["text"])
+            if isinstance(part, str):
+                if part.lstrip().startswith("[System:"):
+                    continue
+                chunks.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                if part["text"].lstrip().startswith("[System:"):
+                    continue
+                chunks.append(part["text"])
             elif isinstance(part, dict) and part.get("type"):
                 rendered = _history_dict_text(part, image_urls=image_urls)
                 chunks.append(rendered if part["type"] in _HISTORY_TEXT_KINDS else f"\n{rendered}")
@@ -149,7 +162,15 @@ def _strip_trailing_screenshot_placeholders(text: str) -> tuple[str, int]:
 
 def _user_image_display_text(content: Any) -> str | None:
     """Project verified native-vision images as refs without changing stored/model content."""
-    if not isinstance(content, list) or len(content) < 2 or not isinstance(content[0], dict):
+    if not isinstance(content, list):
+        return None
+    # Drop trailing display-hidden note parts (mid-session skill/system notices) so they neither
+    # break the image-ref projection nor leak into the bubble body; the model still gets them.
+    content = list(content)
+    while content and isinstance(content[-1], dict) and isinstance(content[-1].get("text"), str) \
+            and content[-1]["text"].lstrip().startswith("[System:"):
+        content.pop()
+    if len(content) < 2 or not isinstance(content[0], dict):
         return None
     text_part = content[0]
     if text_part.get("type") != "text" or not isinstance(text_part.get("text"), str):
