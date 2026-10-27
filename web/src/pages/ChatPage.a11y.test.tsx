@@ -283,6 +283,24 @@ describe("ChatPage composer screen-reader accessibility (#36784)", () => {
     expect(FakeTerminal.instances[0].options.screenReaderMode).toBe(true);
   });
 
+  it("disables screenReaderMode on Android so soft-keyboard input reaches the PTY", async () => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36",
+    });
+
+    const { default: ChatPage } = await import("./ChatPage");
+    await render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <ChatPage isActive />
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(FakeTerminal.instances).toHaveLength(1);
+    expect(FakeTerminal.instances[0].options.screenReaderMode).toBe(false);
+  });
+
   it("exposes the terminal host as a labelled region in the accessibility tree", async () => {
     const { default: ChatPage } = await import("./ChatPage");
     await render(

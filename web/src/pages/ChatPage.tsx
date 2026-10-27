@@ -539,7 +539,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       // Browser-embedded chat runs the TUI in inline mode. Keep transcript
       // history in xterm.js so the browser wheel can scroll it directly.
       scrollback: 5000,
-      screenReaderMode: true, // AT textarea; composer a11y (#36784)
+      screenReaderMode: !/Android/i.test(navigator.userAgent), // AT textarea; composer a11y (#36784)
       theme: terminalTheme,
     });
     termRef.current = term;
