@@ -592,11 +592,21 @@ if not _pm_repair:
                 _launch_python, _root, sys.argv, sys.orig_argv,
                 getattr(_main_spec, "name", None),
             )
-            if os.name == "nt":
-                import subprocess
+            try:
+                if os.name == "nt":
+                    import subprocess
 
-                raise RelaunchExit(subprocess.call(_command))
-            os.execv(str(_launch_python), _command)
+                    raise RelaunchExit(subprocess.call(_command))
+                os.execv(str(_launch_python), _command)
+            except OSError as exc:
+                if exc.errno != errno.E2BIG:
+                    raise
+                # The completion committed, but this process cannot re-enter it: the previous tree
+                # would keep running while HEAD has moved, so a warning hides an update that never
+                # applied (#145358).
+                print(f"hermes: source-update completion failed: {exc}; "
+                      "run `hermes update` to finish it", file=sys.stderr)
+                raise SystemExit(1) from None
     except Exception as exc:
         if isinstance(exc, PermissionError) and (message := install_state_permission_message(_root, exc)):
             print(f"hermes: {message}", file=sys.stderr)

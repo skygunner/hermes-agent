@@ -1,4 +1,7 @@
-"""A fresh launch finishes a source update using PM's success record, not a marker."""
+"""A fresh launch finishes a source update using PM's success record, not a marker.
+
+#145358: a relaunch whose inline program outgrew ARG_MAX must still re-enter, not skip completion.
+"""
 from __future__ import annotations
 
 import json
@@ -379,6 +382,30 @@ def test_relaunch_runs_zip_launchers_and_preserves_interpreter_options(tmp_path)
     result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [["arg with spaces"], True, 1]
+
+
+# Spawns its own interpreter with a program far above ARG_MAX: the live-system guard tokenizes
+# every spawned command line and crawls on one huge token, which this test needs on the base commit.
+@pytest.mark.live_system_guard_bypass
+def test_relaunch_moves_a_large_inline_program_out_of_argv(tmp_path):
+    """A service launcher's inline program can outgrow the kernel's argv cap.
+
+    Rebuilt into one ``-c`` argument it exceeded ARG_MAX: the re-exec died E2BIG, the launch
+    kept the previous tree while HEAD had moved, and only a warning said so.
+    """
+    root = tmp_path / "source"
+    root.mkdir()
+    # One huge source token, the shape a data/base64 launcher payload takes.
+    program = (
+        "import json, sys; print(json.dumps(sys.argv[1:]))\n"
+        "DATA = '" + "a" * 600_000 + "'\n"
+    )
+    argv = ["-c", "--flag", "value"]
+    original = [sys.executable, "-I", "-c", program, *argv[1:]]
+    command = venv_sync.relaunch_command(Path(sys.executable), root, argv, original, None)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == argv[1:]
 
 
 def test_live_old_update_blocks_launch_sync(tmp_path, monkeypatch):

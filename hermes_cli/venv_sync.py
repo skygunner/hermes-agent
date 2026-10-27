@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from hermes_cli.steward import UPDATE_MECHANISMS
@@ -597,6 +598,12 @@ def _sync_source_dependencies(root: Path, *, arm: bool, borrowed_from: Path | No
         (root / name).unlink(missing_ok=True)
 
 
+#: One argv element is capped by the kernel's MAX_ARG_STRLEN (128 KiB on Linux) and shares
+#: ARG_MAX with the environment. A service's inline launcher (``python -I -c '<program>'``) is
+#: what grows past it; below this the program still rides ``-c``.
+_MAX_INLINE_PROGRAM_BYTES = 64 * 1024
+
+
 def relaunch_command(
     python: Path, root: Path, argv: list[str], original: list[str], module: str | None,
 ) -> list[str]:
@@ -626,7 +633,19 @@ def relaunch_command(
         # distlib .exe launchers are executable zip files with __main__, not
         # importable modules named '__main__'. run_path handles both shapes.
         body = f"runpy.run_path({str(Path(argv[0]).absolute())!r}, run_name='__main__')"
-    return [str(python), *options, "-I", "-c", prefix + body]
+    program = prefix + body
+    if len(program.encode("utf-8")) > _MAX_INLINE_PROGRAM_BYTES:
+        # #145358: a large program cannot be re-executed from argv -- the re-exec dies E2BIG and
+        # source-update completion is skipped while HEAD has already moved. Hand the program over
+        # in a file that is removed before it runs; ``-c`` keeps cwd/``__name__`` semantics.
+        fd, path = tempfile.mkstemp(prefix="hermes-relaunch-", suffix=".py")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(program)
+        program = (
+            f"import os; _p = {path!r}; _s = open(_p, encoding='utf-8-sig').read(); os.unlink(_p); "
+            "exec(compile(_s, _p, 'exec'))"
+        )
+    return [str(python), *options, "-I", "-c", program]
 
 
 def main(argv: list | None = None) -> int:
