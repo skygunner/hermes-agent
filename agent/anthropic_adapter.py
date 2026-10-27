@@ -160,7 +160,10 @@ def _resolve_anthropic_messages_max_tokens(requested, model: str, context_length
     """``requested`` when it is a positive finite number, else the model's output ceiling. Raises
     ValueError if neither is positive. The context-window clamp is the caller's job so the
     positive-value contract stays endpoint-agnostic."""
+    # Clamp the caller's value to the model's own output ceiling: an explicit
+    # max_tokens above the model's documented limit must not reach the API.
     resolved = _resolve_positive_anthropic_max_tokens(requested) or _get_anthropic_max_output(model)
+    resolved = min(resolved, _get_anthropic_max_output(model))
     if resolved > 0:
         return resolved
     raise ValueError(
