@@ -253,6 +253,7 @@ def _recover_renamed_skill(st: "_SyncState", skill_name: str, dest: Path) -> Opt
             _move_dir(candidate, dest)
         except OSError:
             logger.warning("Could not relocate renamed skill %s -> %s", candidate, dest, exc_info=True)
+            st.relocate_failed.append(f"{skill_name} ({rel} -> {_rel_skills_posix(dest)})")
             return None
         logger.info("Relocated renamed bundled skill: %s -> %s", candidate, dest)
         st.say(f"  → {skill_name} (moved {rel} → {_rel_skills_posix(dest)})")
@@ -271,6 +272,7 @@ class _SyncState:
     user_modified: list[str] = field(default_factory=list)
     suppressed: list[str] = field(default_factory=list)
     relocated: list[str] = field(default_factory=list)
+    relocate_failed: list[str] = field(default_factory=list)
     shadowed_by_external: list[str] = field(default_factory=list)
     active_index: Optional[dict[str, list[Path]]] = None  # rename-recovery indexes are expensive on
     hub_paths: set[str] = field(default_factory=set)  # bind mounts: built lazily, only when needed
@@ -403,7 +405,8 @@ def sync_skills(quiet: bool = False) -> dict:
     bundled_dir = _get_bundled_dir()
     if not bundled_dir.exists():
         return {"copied": [], "updated": [], "skipped": 0, "user_modified": [], "cleaned": [],
-                "suppressed": [], "total_bundled": 0, "optional_provenance_backfilled": []}
+                "suppressed": [], "relocated": [], "relocate_failed": [],
+                "total_bundled": 0, "optional_provenance_backfilled": []}
     _skills_dir().mkdir(parents=True, exist_ok=True)
     bundled_skills = _discover_bundled_skills(bundled_dir)
     if essential_only:
@@ -451,6 +454,7 @@ def sync_skills(quiet: bool = False) -> dict:
     return {
         "copied": st.copied, "updated": st.updated, "skipped": st.skipped, "user_modified": st.user_modified,
         "cleaned": cleaned, "suppressed": st.suppressed, "relocated": st.relocated,
+        "relocate_failed": st.relocate_failed,
         "total_bundled": len(bundled_skills),
         "optional_provenance_backfilled": _backfill_optional_provenance(quiet=quiet),
         "shadowed_by_external": st.shadowed_by_external,

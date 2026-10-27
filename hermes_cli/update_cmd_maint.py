@@ -522,7 +522,9 @@ def _print_bundled_skills_sync_report() -> None:
         print(f"  − {len(result['cleaned'])} removed from manifest")
     if result.get("relocated"):
         print(f"  → {len(result['relocated'])} moved to new upstream paths: {', '.join(result['relocated'])}")
-    if not result["copied"] and not result.get("updated"):
+    if result.get("relocate_failed"):
+        print(f"  ⚠ {len(result['relocate_failed'])} could not be moved: {', '.join(result['relocate_failed'])}")
+    if not result["copied"] and not result.get("updated") and not result.get("relocate_failed"):
         print("  ✓ Skills are up to date")
 
 

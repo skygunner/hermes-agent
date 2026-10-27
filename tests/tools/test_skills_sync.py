@@ -326,6 +326,27 @@ class TestRenamedBundledSkillRecovery:
         # Future syncs can now detect further upstream changes.
         assert recorded == dir_hash(bundled / "newcat" / "moved-skill")
 
+    def test_relocation_failure_is_reported_not_silently_up_to_date(self, tmp_path, monkeypatch):
+        """A refused rename move must surface in the sync result (#143470): the report used to say
+        "Skills are up to date" while the stale copy stayed stranded."""
+        bundled = tmp_path / "bundled"
+        skills_dir = tmp_path / "user_skills"
+        manifest_file = skills_dir / ".bundled_manifest"
+        old = self._skill(skills_dir, "oldcat/moved-skill")
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(f"moved-skill:{dir_hash(old)}\n")
+        self._skill(bundled, "newcat/moved-skill", body="# Updated upstream\n")
+
+        def refuse(src, dst):
+            raise OSError("read-only skills root")
+
+        with self._patches(bundled, skills_dir, manifest_file):
+            monkeypatch.setattr("tools.skills_sync._move_dir", refuse)
+            result = sync_skills(quiet=True)
+
+        assert result["relocate_failed"], "a refused relocation must be reported"
+        assert "moved-skill" in result["relocate_failed"][0]
+
     def test_rename_leaves_user_modified_and_hub_owned_copies_alone(self, tmp_path):
         """A user-edited copy is never moved or overwritten, and a hub-owned
         path is never relocated — the hub lock owns it."""
