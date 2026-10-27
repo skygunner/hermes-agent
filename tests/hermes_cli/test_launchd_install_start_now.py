@@ -4,6 +4,7 @@ The plist carries RunAtLoad, so loading it (`launchctl bootstrap`) starts the ga
 no-start install must therefore write the plist without loading it; `hermes gateway start` loads it later.
 """
 import argparse
+import os
 import plistlib
 import subprocess
 from types import SimpleNamespace
@@ -98,3 +99,54 @@ def test_wizard_no_to_start_now_installs_without_loading(launchd, monkeypatch):
     assert launchd.plist.exists()
     assert launchd.bootstraps == []
     assert launchd.starts == []
+
+
+class TestDeferredReloadKickstarts:
+    """Regression #142741: the deferred reload script only retried `launchctl bootstrap`. A label
+    launchd holds WITHOUT running it (on-demand plist, or a gui/<uid> domain that starts no jobs) is
+    already registered, so re-bootstrapping never supervises it and the reload loop spins to its
+    deadline. The script must kickstart the job launchd already holds."""
+
+    def test_script_kickstarts_a_registered_but_not_running_job(self, tmp_path, monkeypatch):
+        from hermes_cli import gateway_launchd
+
+        # A fake launchctl: bootstrap never supervises, kickstart does. The marker file is the
+        # observable proof that the generated script actually invoked kickstart.
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        marker = tmp_path / "kicked"
+        (bin_dir / "sleep").write_text("#!/bin/bash\nexit 0\n")
+        (bin_dir / "sleep").chmod(0o755)
+        (bin_dir / "launchctl").write_text(
+            "#!/bin/bash\n"
+            f"case \"$1\" in\n"
+            f"  submit) script=\"${{@: -1}}\"; printf '%s' \"$script\" > {tmp_path / 'script.sh'};\n"
+            f"          /bin/bash {tmp_path / 'script.sh'}; exit $? ;;\n"
+            f"  list) if [ -f {marker} ]; then echo '\"PID\" = 4242;'; else echo '\"PID\" = -1;'; fi ;;\n"
+            f"  kickstart) touch {marker} ;;\n"
+            f"  bootstrap|bootout|remove) exit 0 ;;\n"
+            f"  *) exit 0 ;;\n"
+            f"esac\n",
+        )
+        (bin_dir / "launchctl").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+        monkeypatch.setattr(gateway_launchd, "_gw", lambda: SimpleNamespace(
+            _append_launchd_reload_log=lambda *a, **k: None))
+        monkeypatch.setattr(gateway_launchd, "_launchd_reload_log_path", lambda: tmp_path / "reload.log")
+        monkeypatch.setattr(gateway_launchd, "_launchd_reload_budget", lambda: 1)
+
+        monkeypatch.setattr(gateway_launchd, "_launchd_reload_budget", lambda: 1)
+        plist_path = tmp_path / "com.hermes.agent.plist"
+        plist_path.write_text("<plist/>", encoding="utf-8")
+        assert gateway_launchd._spawn_deferred_launchd_reload(
+            domain="gui/501", label=LABEL, target="gui/501/" + LABEL,
+            plist_path=plist_path, gateway_pid=2 ** 22,
+        )
+
+        # No Popen monkeypatch: the real submit -> bash path runs asynchronously, so wait for it.
+        from tests.waiting import wait_until
+
+        assert wait_until(
+            lambda: marker.exists(), timeout=30, what="the deferred reload script to kickstart",
+        ), "the reload script never kickstarted the registered-not-running job"

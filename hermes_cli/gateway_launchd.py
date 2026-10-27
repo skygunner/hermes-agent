@@ -518,6 +518,13 @@ def _spawn_deferred_launchd_reload(
         f"sleep 1; _deadline=$(($(date +%s) + {_reload_budget})); while :; do "
         f"  launchctl bootstrap {shlex.quote(domain)} {shlex.quote(str(plist_path))} 2>/dev/null; "
         f"  if {listed}; then break; fi; "
+        # A label launchd already holds without running it never needs re-bootstrapping: bootstrap on
+        # such a label is a no-op (or boots the job out), so kickstart the registered job (#142741).
+        f"  registered=$(launchctl list {q_label} 2>/dev/null | grep -cE '\"PID\" = '); "
+        f"  if [ \"$registered\" -gt 0 ]; then "
+        f"    launchctl kickstart {shlex.quote(target)} 2>/dev/null; "
+        f"    if {listed}; then break; fi; "
+        f"  fi; "
         f"  echo \"[{stamp}] bootstrap not yet registered for {q_target} — retrying\" >> {q_log}; "
         f"  if [ $(date +%s) -ge $_deadline ]; then break; fi;   sleep 2; done; "
         f"if ! {listed}; then "
