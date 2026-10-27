@@ -1314,6 +1314,7 @@ class TestToolChoice:
 from agent.anthropic_adapter import (
     _resolve_positive_anthropic_max_tokens,
     _resolve_anthropic_messages_max_tokens,
+    _get_anthropic_max_output,
 )
 
 
@@ -1349,6 +1350,18 @@ class TestResolveMessagesMaxTokens:
         result = _resolve_anthropic_messages_max_tokens(0.5, "claude-opus-4-6")
         assert result > 0
         assert result != 0
+
+    def test_requested_above_model_ceiling_is_clamped(self):
+        # Regression #145269: an explicit max_tokens above the model's documented output limit
+        # must not be forwarded to the API (131072 vs 128000 for the default family).
+        assert _resolve_anthropic_messages_max_tokens(
+            131072, "claude-opus-4-6"
+        ) == _get_anthropic_max_output("claude-opus-4-6")
+
+    def test_requested_within_model_ceiling_is_unchanged(self):
+        assert _resolve_anthropic_messages_max_tokens(
+            8192, "claude-opus-4-6"
+        ) == 8192
 
 
 # ---------------------------------------------------------------------------
