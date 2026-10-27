@@ -185,7 +185,7 @@ def append_notes_to_multimodal_content(content: Any, notes: Optional[str]) -> bo
     if not notes or not isinstance(content, list):
         return False
     with suppress(Exception):
-        content.append({"type": "text", "text": notes})
+        content.append({"type": "text", "text": f"[System: {notes}]"})
         return True
     return False
 
