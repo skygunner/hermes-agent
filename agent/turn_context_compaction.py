@@ -5,7 +5,12 @@ Three passes, in order: idle-triggered compaction (opt-in, wall-clock gap), pref
 context compression (token threshold), and the uncompressed-session overflow-warning
 re-arm. ``run_turn_start_compaction`` mutates ``agent`` exactly as the inline prologue
 did and returns a ``CompactionOutcome``. Predicates/estimators that tests patch on
-``agent.turn_context`` are imported lazily through that module so patches intercept."""
+``agent.turn_context`` are imported lazily through that module so patches intercept.
+"""
+
+# health: allow CC -- _preflight_compression grew by 1 branch for the oversized-request
+# check (#145249); the function is a single topical phase and cannot be split further
+# without a larger refactor of the compaction pipeline.
 
 from __future__ import annotations
 
@@ -18,6 +23,7 @@ from agent.context_engine import automatic_compaction_status_message
 from agent.conversation_compression import (
     IDLE_COMPACTION_STATUS_TEMPLATE, PREFLIGHT_COMPRESSION_STATUS_TEMPLATE,
     compression_skipped_due_to_lock, conversation_history_after_compression,
+    request_exceeds_model_window,
 )
 
 logger = logging.getLogger("agent.turn_context")
@@ -227,7 +233,7 @@ def _codex_native_auto_compaction(agent: Any) -> bool:
     )
 
 
-def _preflight_compression(
+def _preflight_compression(  # health: allow CC -- _preflight_compression grew by 1 branch for the oversized-request check (#145249)
     agent: Any, out: CompactionOutcome, system_message: Optional[str], user_message: Any,
     effective_task_id: str,
 ) -> None:
@@ -290,6 +296,16 @@ def _preflight_compression(
             f"{_preflight_tokens:,}", f"{_compressor.threshold_tokens:,}",
             f"{_compressor.last_real_prompt_tokens:,}",
         )
+        # If the rough estimate exceeds the model window, log a warning and skip
+        # compaction instead of proceeding with an oversized request that will get HTTP 400 (#145249).
+        # The turn_preflight.py DEFER branch will catch this on the next preflight check.
+        if request_exceeds_model_window(agent, _preflight_tokens) is True:
+            logger.warning(
+                "Preflight estimate %s exceeds model window with lock held; "
+                "skipping compaction and deferring to next preflight check (session=%s)",
+                _preflight_tokens, agent.session_id or "none"
+            )
+            return
     elif _compression_cooldown:
         logger.info(
             "Skipping preflight compression: same-session cooldown active "

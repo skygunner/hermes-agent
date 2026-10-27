@@ -18,6 +18,7 @@ from agent.conversation_compression import (
     PRE_API_COMPRESSION_STATUS_TEMPLATE, _reset_read_dedup_caches, compression_blocked_transiently,
     compression_skipped_due_to_lock, context_compression_timed_out,
     conversation_history_after_compression, ensure_compression_feasibility_checked,
+    request_exceeds_model_window,
 )
 from agent.turn_context import _review_fork_first_request_pending
 from agent.turn_context_compaction import (
@@ -162,6 +163,13 @@ def run_preflight_compression(
         ):
             # Temporary DEFER (lock held / cooldown), not evidence about compressibility:
             # refund the attempt, leave the progress blocker unarmed and proceed.
+            # But if the request exceeds the model window, fail closed with deferred result
+            # instead of sending an oversized request that will get HTTP 400.
+            estimate = getattr(agent, "_preflight_tokens", None)
+            if estimate is not None and request_exceeds_model_window(agent, estimate) is True:
+                return _done("return", _compression_deferred_result(
+                    agent, v.messages, v.api_call_count, reason="lock"))
+            # Request fits (or unknown) -> proceed with the original defer behavior
             v.compression_attempts -= 1
             v._last_preflight_pressure = None
             if v.pending_moa_prepared_request is moa_prepared_request:
