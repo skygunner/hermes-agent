@@ -962,6 +962,16 @@ def _presence(approval_callback=None) -> tuple:
         # POST -> 202 lane has no reader, so a registered callback there answers nothing either
         # — resolve from approvals.unattended_mode, never a pending no one can answer.
         is_ask = False
+    # Gateway sessions with a notifier callback that has since been unregistered (turn ended)
+    # should also resolve from approvals.unattended_mode instead of parking pending_approval
+    # with no notifier. This mirrors the unattended-platform guard above.
+    elif is_ask and is_gateway and _gateway_notify_cb(get_current_session_key()) is None:
+        logger.warning(
+            "approval gate: HERMES_EXEC_ASK=1 but no notifier registered for session %s; "
+            "resolving from approvals.unattended_mode instead of pending_approval",
+            get_current_session_key(),
+        )
+        is_ask = False
     return approval_callback, is_cli, is_gateway, is_ask
 
 
