@@ -35,6 +35,7 @@ import {
   isPendingDraftPersistCurrent,
   type QueueEditState
 } from '../composer-utils'
+import { hasTranscriptTextSelection } from '@/components/assistant-ui/thread/list'
 import {
   ackComposerInsert,
   type ComposerInsertMode,
@@ -194,7 +195,10 @@ export function useComposerDraft({
           // here steals the selection from the visible composer without changing
           // document.activeElement. The foreground then still looks focused while
           // printable keydowns produce no input.
-          placeCaretEnd(editor)
+          // Guard: do not steal a live transcript text selection (e.g. user copying).
+          if (!hasTranscriptTextSelection()) {
+            placeCaretEnd(editor)
+          }
         }
       }
 
