@@ -155,6 +155,48 @@ def test_normalize_rejects_malformed_batches(bad, expected_fragment):
     assert expected_fragment in (err or "")
 
 
+def test_missing_name_refusal_carries_the_shape_to_retry_without_inventing_a_name():
+    """#142677: a nameless entry used to draw a bare constraint, so the model re-sent the
+    identical payload. The refusal now names the missing field, echoes the entry's own
+    arguments (bounded, with an explicit truncation marker), restates the valid shape, and
+    still invents no name — a name buried in ``arguments`` is the malformation, not a
+    recovery source — so dispatch stays at zero for every variant."""
+    received = {"arguments": {"adapter": "playwright", "callerAgent": "hermes-picard"}}
+    entries, err = normalize_tool_call_entries({"calls": [received]})
+    assert entries == []
+    assert "requires a 'name'" in err
+    assert '"name":"<tool name>"' in err and '"arguments":{...}' in err
+    assert json.dumps(received["arguments"], separators=(",", ":")) in err
+    assert "is not the name" in err
+    name, resolved, resolve_err = resolve_underlying_call({"calls": [received]})
+    assert name is None and resolved == {} and resolve_err == err
+
+    # A truncated payload gets ONE bounded refusal: the echo is cut with a marker, not unbounded.
+    long_args = {"adapter": "playwright", "context": "x" * 4000}
+    _, truncated = normalize_tool_call_entries({"calls": [{"arguments": long_args}]})
+    assert "... (truncated)" in truncated
+    echo = truncated.split("Retry as ", 1)[1].split(". A 'name'", 1)[0]
+    assert len(echo) < 1600
+    assert "x" * 200 in echo
+
+    # Adversarial: nested/unknown names stay nameless at the outer entry (no promotion, no
+    # unwrapping, no recursion) and never reach resolver, lookup or dispatch.
+    for hidden in (
+        {"name": "dangerous_tool", "arguments": {}},
+        {"tool_call": {"name": "dangerous_tool", "arguments": {}}},
+        {"calls": [{"name": "dangerous_tool", "arguments": {}}]},
+        {"name": "dangerous_tool", "arguments": {"calls": [{"name": "x", "arguments": {}}]}},
+    ):
+        payload = {"calls": [{"arguments": hidden}]}
+        entries, err = normalize_tool_call_entries(payload)
+        assert entries == []
+        assert "requires a 'name'" in err
+        name, resolved, resolve_err = resolve_underlying_call(payload)
+        assert name is None and resolved == {} and resolve_err == err
+        # The refusal itself is bounded whatever the payload nests.
+        assert len(err) < 2500
+
+
 # ---------------------------------------------------------------------------
 # dispatch_tool_search: remote merge
 # ---------------------------------------------------------------------------

@@ -169,7 +169,7 @@ def normalize_tool_call_entries(args: dict[str, Any]) -> tuple[list[dict[str, An
             return [], f"tool_call calls[{position}] must be an object with 'name' and 'arguments'"
         name = str(raw.get("name") or "").strip()
         if not name:
-            return [], f"tool_call calls[{position}] requires a 'name'"
+            return [], _missing_name_error(position, raw)
         if name in BRIDGE_TOOL_NAMES:
             return [], f"tool_call cannot invoke '{name}' (it is itself a bridge tool)"
         raw_args = raw.get("arguments")
@@ -191,6 +191,30 @@ def normalize_tool_call_entries(args: dict[str, Any]) -> tuple[list[dict[str, An
 
 
 _ECHO_ARGS_MAX_CHARS = 1500
+
+
+def _missing_name_error(position: int, raw: dict[str, Any]) -> str:
+    """Refusal for an entry that carries no ``name``. The bare constraint leaves the model
+    with nothing to correct against, so it re-sends the identical payload (#142677); restate
+    the valid shape with the caller's own arguments the way ``local_batch_error`` does. It
+    echoes only what the payload shows and derives nothing from it: a name buried in
+    ``arguments`` is the malformation, not a recovery source."""
+    raw_args = raw.get("arguments")
+    if raw_args is None:
+        args = "{}"
+    elif isinstance(raw_args, str):
+        args = raw_args
+    else:
+        args = json.dumps(raw_args, ensure_ascii=False, separators=(",", ":"))
+    if len(args) > _ECHO_ARGS_MAX_CHARS:
+        args = args[:_ECHO_ARGS_MAX_CHARS] + "... (truncated)"
+    retry = f'{{"name":"<tool name>","arguments":{args}}}'
+    return (
+        f"tool_call calls[{position}] requires a 'name'. Each entry needs both keys: "
+        '{"name":"<tool name>","arguments":{...}}. '
+        f"Retry as {retry}. A 'name' inside 'arguments' (or a nested tool_call object there) "
+        "is not the name — put 'name' on the entry, beside 'arguments'. The tool was NOT invoked."
+    )
 
 
 def local_batch_error(entries: list[dict[str, Any]]) -> str:
