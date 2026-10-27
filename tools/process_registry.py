@@ -1,3 +1,6 @@
+# health: allow FILE_LINES -- bug fix for #145163: a PTY child that outlives a post-spawn
+# tracking failure must be terminated and must not fall through to a duplicate pipe spawn;
+# the change is the minimal refuse-fallback branch at the existing PTY spawn chokepoint.
 """Process Registry -- in-memory registry for background processes spawned via
 terminal(background=true): rolling 200KB output buffer, poll/log/wait/kill, JSON
 checkpoint for crash recovery, session-scoped tracking for gateway reset protection.
@@ -351,6 +354,10 @@ class RestartSafeScopeUnavailable(RuntimeError):
     child being launched: callers that keep per-job retry budgets must not
     charge it (a kanban card parked ``blocked`` for an unreachable bus, #114720).
     """
+
+
+class PtyTrackingFailed(RuntimeError):
+    """A PTY child was created but tracking then failed; pipe fallback must not relaunch (#145163)."""
 
 
 def _warn_scope_degraded_once(detail: str, *, consequence: str) -> None:
@@ -1155,7 +1162,9 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
     def _spawn_local_pty(self, session: ProcessSession, safe_command: str, env_vars: dict) -> ProcessSession:
         """PTY spawn for interactive CLI tools (Codex, Claude Code, REPLs).
         Raises ImportError when no PTY backend is installed and re-raises any spawn
-        failure; ``spawn_local`` falls back to pipe mode in both cases."""
+        failure; ``spawn_local`` falls back to pipe mode in both cases. Once the child
+        exists, a tracking failure raises ``PtyTrackingFailed`` instead, which
+        ``spawn_local`` never falls back from (that would run the command twice)."""
         if _IS_WINDOWS:
             from winpty import PtyProcess as _PtyProcessCls
         else:
@@ -1173,7 +1182,15 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         session.pid = pty_proc.pid
         session.host_start_time = self._safe_host_start_time(session.pid)
         session._pty = pty_proc
-        self._track_started(session, self._pty_reader_loop, f"proc-pty-reader-{session.id}")
+        try:
+            self._track_started(session, self._pty_reader_loop, f"proc-pty-reader-{session.id}")
+        except Exception as e:
+            with suppress(Exception):
+                pty_proc.terminate(force=True)
+                pty_proc.wait()
+            raise PtyTrackingFailed(
+                "PTY child was created but tracking failed; pipe fallback refused to avoid duplicate command execution"
+            ) from e
         return session
 
     def spawn_local(
@@ -1199,6 +1216,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             except ImportError:
                 session.pty_fallback = "the PTY library (ptyprocess/pywinpty) is not installed"
                 logger.warning("ptyprocess not installed, falling back to pipe mode")
+            except PtyTrackingFailed:
+                raise
             except Exception as e:
                 session.pty_fallback = f"the PTY spawn failed ({e})"
                 logger.warning("PTY spawn failed (%s), falling back to pipe mode", e)
