@@ -470,7 +470,10 @@ def launchd_plist_is_current() -> bool:
     plist_path = _gw().get_launchd_plist_path()
     if not plist_path.exists():
         return False
-    installed = plist_path.read_text(encoding="utf-8-sig")
+    try:
+        installed = plist_path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return False  # binary (bplist00) plist: never matches the text plist we generate
     norm = _gw()._normalize_launchd_plist_for_comparison
     return norm(installed) == norm(_gw().generate_launchd_plist())
 

@@ -27,3 +27,16 @@ def test_refresh_reports_registration_outcome(tmp_path, monkeypatch, capsys):
     _stale_plist(tmp_path, monkeypatch, registered=True)
     assert gw.refresh_launchd_plist_if_needed() is True
     assert "Updated" in capsys.readouterr().out
+
+
+def test_a_binary_plist_is_not_current(tmp_path, monkeypatch):
+    """Regression #142999: launchd may hand us a bplist00 plist, and reading it as text raised
+    UnicodeDecodeError out of the refresh path."""
+    from hermes_cli.gateway_launchd import launchd_plist_is_current
+
+    plist_path = tmp_path / 'com.hermes.agent.plist'
+    plist_path.write_bytes(b'bplist00\xd4\xd4\xd4\xd4')
+    monkeypatch.setattr('hermes_cli.gateway_launchd._gw', lambda: MagicMock(
+        get_launchd_plist_path=lambda: plist_path,
+        generate_launchd_plist=lambda: '<?xml version="1.0"?><plist/>'))
+    assert launchd_plist_is_current() is False
