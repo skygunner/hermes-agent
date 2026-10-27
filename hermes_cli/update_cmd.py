@@ -78,7 +78,7 @@ from hermes_cli.update_cmd_zip import (
 from hermes_cli.update_cmd_stash import (
     _AUTOSTASH_NAME_PREFIX, _AUTOSTASH_WARN_AGE_DAYS, _clear_pending_autostash,
     _discard_stashed_changes,
-    _git_untracked_paths, _park_stashed_changes, _print_stash_cleanup_guidance,
+    _git_untracked_paths, _maybe_stash_recheck_changes, _park_stashed_changes, _print_stash_cleanup_guidance,
     _reject_unsafe_stash_restore, _resolve_stash_selector, _restore_stashed_changes,
     _restored_python_paths, _stash_apply_failed_only_on_existing_untracked,
     _stash_local_changes_if_needed, _unrestored_autostash_notice,
@@ -1134,8 +1134,16 @@ def _pull_updates(
         try:
             # The paused gateways' tree gate must know this move's target before git writes a file.
             with _checkout_move(_windows_gateway_resume, target_sha):
-                _move_checkout_to(git_cmd, branch, merge_ref, target_sha, pre_pull_sha)
-            _refuse_unselected_head(git_cmd, target_sha, pre_pull_sha)  # before the marker goes
+                # Re-check for local changes that may have appeared during the drain wait.
+                # A concurrent agent turn could have dirtied the tree; create a second
+                # autostash so the fast-forward can proceed without aborting.
+                recheck_stash = _maybe_stash_recheck_changes(git_cmd, _m().PROJECT_ROOT)
+                try:
+                    _move_checkout_to(git_cmd, branch, merge_ref, target_sha, pre_pull_sha)
+                finally:
+                    if recheck_stash:
+                        _git_run(git_cmd, ["stash", "pop", recheck_stash], _m().PROJECT_ROOT, check=False)
+                _refuse_unselected_head(git_cmd, target_sha, pre_pull_sha)  # before the marker goes
         except KeyboardInterrupt:
             raise  # Ctrl-C reached git too (same process group): the tree may be torn, keep the marker
         except BaseException:

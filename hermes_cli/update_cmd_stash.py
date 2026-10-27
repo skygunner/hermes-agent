@@ -569,6 +569,36 @@ def _restore_stashed_changes(
     return True
 
 
+def _maybe_stash_recheck_changes(git_cmd: list[str], cwd: Path) -> Optional[str]:
+    """Re-check for local changes that may have appeared during the drain wait.
+    A concurrent agent turn could have dirtied the tree; create a second
+    autostash so the fast-forward can proceed without aborting.
+    Returns the stash ref if a stash was created, None otherwise."""
+    from hermes_cli.update_cmd_git import _git_run
+    status = _git_run(git_cmd, ["status", "--porcelain", "--untracked-files=no"], cwd, check=True)
+    if not status.stdout.strip():
+        return None
+    # Unmerged index entries (interrupted merge/rebase) make `git stash` fail with
+    # "needs merge"; `git reset` drops only the index conflict state, not the tree.
+    if _git_run(git_cmd, ["ls-files", "--unmerged"], cwd).stdout.strip():
+        print("→ Clearing unmerged index entries from a previous conflict...")
+        _git_run(git_cmd, ["reset"], cwd)
+
+    # Intent-to-add entries are the other index state `git stash push` refuses.
+    intent_to_add = _intent_to_add_paths(status.stdout)
+    if intent_to_add:
+        print(f"→ Making {len(intent_to_add)} intent-to-add file(s) stashable...")
+        add = _git_run(git_cmd, ["add", "--", *intent_to_add], cwd)
+        if add.returncode != 0:
+            _print_nonempty(add.stderr)
+
+    stash_name = datetime.now(UTC).strftime(f"{_AUTOSTASH_NAME_PREFIX}%Y%m%d-%H%M%S-recheck")
+    print("→ Re-check: local changes detected during drain wait — stashing before move...")
+    prev_stash = _git_run(git_cmd, ["rev-parse", "--verify", "refs/stash"], cwd).stdout.strip()
+    stash_ref = _push_stash(git_cmd, cwd, stash_name, prev_stash)
+    return stash_ref
+
+
 def _discard_stashed_changes(git_cmd: list[str], cwd: Path, stash_ref: str) -> bool:
     """Drop a pre-update stash without applying (non-interactive ``updates.non_interactive_local_changes: discard``).
 
