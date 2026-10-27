@@ -11,7 +11,7 @@ ENV_OVERRIDES = (
         Platform.BLUEBUBBLES, ("BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_PASSWORD"),
         fixed=(
             ("server_url", "BLUEBUBBLES_SERVER_URL", "", strip_slash), ("password", "BLUEBUBBLES_PASSWORD"),
-            ("webhook_host", "BLUEBUBBLES_WEBHOOK_HOST", "127.0.0.1"),
+            ("webhook_host", "BLUEBUBBLES_WEBHOOK_HOST", "localhost"),
             ("webhook_port", "BLUEBUBBLES_WEBHOOK_PORT", "", int_or(8645)),
             ("webhook_path", "BLUEBUBBLES_WEBHOOK_PATH", "/bluebubbles-webhook"),
             ("send_read_receipts", "BLUEBUBBLES_SEND_READ_RECEIPTS", "true", is_truthy_value),

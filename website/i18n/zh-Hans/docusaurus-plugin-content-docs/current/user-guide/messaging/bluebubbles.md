@@ -84,7 +84,7 @@ Hermes → BlueBubbles REST API → Messages.app → iMessage
 |----------|----------|---------|-------------|
 | `BLUEBUBBLES_SERVER_URL` | 是 | — | BlueBubbles 服务端 URL |
 | `BLUEBUBBLES_PASSWORD` | 是 | — | 服务端密码 |
-| `BLUEBUBBLES_WEBHOOK_HOST` | 否 | `127.0.0.1` | Webhook 监听器绑定地址 |
+| `BLUEBUBBLES_WEBHOOK_HOST` | 否 | `localhost` | Webhook 监听器绑定地址 |
 | `BLUEBUBBLES_WEBHOOK_PORT` | 否 | `8645` | Webhook 监听器端口 |
 | `BLUEBUBBLES_WEBHOOK_PATH` | 否 | `/bluebubbles-webhook` | Webhook URL 路径 |
 | `BLUEBUBBLES_HOME_CHANNEL` | 否 | — | cron 投递使用的手机号/邮箱 |
