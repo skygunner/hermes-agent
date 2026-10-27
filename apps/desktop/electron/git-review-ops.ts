@@ -303,17 +303,25 @@ async function reviewList(repoPath, scope, baseRef, gitBin) {
   try {
     cwd = resolveRequestedPathForIpc(repoPath, { purpose: 'Review list' })
   } catch {
-    return { files: [], base: null }
+    return { files: [], base: null, repoRoot: null }
   }
 
   const git = gitFor(cwd, gitBin)
+
+  let repoRoot: string | null = null
+  try {
+    const rootResult = await git.raw(['rev-parse', '--show-toplevel'])
+    repoRoot = rootResult.trim()
+  } catch {
+    repoRoot = null
+  }
 
   try {
     if (scope === 'branch' || scope === 'lastTurn') {
       const base = scope === 'branch' ? await branchBase(git) : baseRef
 
       if (!base) {
-        return { files: [], base: null }
+        return { files: [], base: null, repoRoot }
       }
 
       const range = scope === 'branch' ? `${base}...HEAD` : base
@@ -351,7 +359,7 @@ async function reviewList(repoPath, scope, baseRef, gitBin) {
       files.sort((a, b) => a.path.localeCompare(b.path))
       await fillUntrackedCounts(cwd, files)
 
-      return { files, base }
+      return { files, base, repoRoot }
     }
 
     // Default: uncommitted (staged + unstaged + untracked), one row per path.
@@ -384,9 +392,9 @@ async function reviewList(repoPath, scope, baseRef, gitBin) {
     files.sort((a, b) => a.path.localeCompare(b.path))
     await fillUntrackedCounts(cwd, files)
 
-    return { files, base: null }
+    return { files, base: null, repoRoot }
   } catch {
-    return { files: [], base: null }
+    return { files: [], base: null, repoRoot }
   }
 }
 
