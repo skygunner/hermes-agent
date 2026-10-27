@@ -205,6 +205,13 @@ class SessionAuthority:
             if local or str(row.get('chat_id') or '').startswith('local-'):
                 from gateway.session_local_recovery import restore_local_session
                 restore_local_session(self, ref.session_id)
+            elif row.get('source') == 'webui':
+                # webui rows have no local receipt, no messaging route, and no API binding.
+                # Mount read-only via history-mount so the transcript is viewable (not writable).
+                from gateway.session_history_mount import mount_history
+                if not mount_history(self, actor, ref.session_id):
+                    from gateway.session_api import restore_api_session
+                    restore_api_session(self, ref.session_id)
             else:
                 from gateway.session_route_recovery import restore_routed_session
                 from gateway.session_history_mount import mount_history
