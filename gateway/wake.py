@@ -113,6 +113,14 @@ async def admit_internal_event(adapter: Any, event: Any) -> None:
     # a claimed turn and the pending discard drops a queued follow-up. Refuse it so the producer
     # retries it after the restart.
     if _runner_draining(adapter):
+        # The busy handler may already have stored the wake as the pending follow-up. The drain
+        # discards it, but the shutdown spool would still write it out and startup recovery would
+        # re-append it to history while the producer retries it after the restart — drop it from
+        # the slot so a refused wake is neither spooled nor re-delivered (#145049). Only when the
+        # slot still holds this exact event: a newer merged/replaced follow-up must survive.
+        key = adapter._event_session_key(event)
+        if adapter._pending_messages.get(key) is event:
+            adapter._pending_messages.pop(key)
         raise WakeNotAccepted("gateway began draining during admission; retry after restart",
                               reason="runtime_draining")
     # No drain began before or during admission, so the producer takes this receipt as final and
