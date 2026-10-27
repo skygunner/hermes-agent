@@ -283,14 +283,13 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
-            # A queued (/queue) chain answered the LAST message of the chain, so the outer final
-            # send (bracketed by the adapter against this event) must be ledgered under that
-            # message's id or it collides with an earlier turn's row carrying the same text. Reply
-            # routing is untouched: the anchor still comes from this event.
+            # A queued chain's final answers its terminal message: ledger id and reply anchor move.
             if isinstance(agent_result, dict):
                 _terminal_inbound = agent_result.get("queued_terminal_inbound_id")
                 if _terminal_inbound:
                     event.ledger_message_id = str(_terminal_inbound)
+                    if agent_result.get("queued_terminal_reply_anchor"):
+                        event.reply_anchor_override = str(agent_result["queued_terminal_reply_anchor"])
                 if "queued_terminal_notification_category" in agent_result:
                     event.metadata["notification_category"] = agent_result["queued_terminal_notification_category"]
                 if isinstance(agent_result.get("_notification_reply_muted"), bool):
@@ -1995,6 +1994,7 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             merged = {
                 **merged,
                 "queued_terminal_inbound_id": next_inbound_id,
+                "queued_terminal_reply_anchor": next_message_id,
                 "queued_terminal_display_kind": next_display_kind,
                 "queued_terminal_reply_expected": next_reply_expected,
                 "queued_terminal_notification_category": (

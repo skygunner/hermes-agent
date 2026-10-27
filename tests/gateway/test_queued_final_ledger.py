@@ -309,6 +309,52 @@ async def test_a_deeper_chain_keeps_the_innermost_inbound_id():
     assert merged["queued_terminal_inbound_id"] == "6003"
 
 
+@pytest.mark.asyncio
+async def test_a_queued_chain_hands_back_the_terminal_reply_anchor():
+    """Regression #144709: the chain's final text answers the LAST message, so the reply anchor
+    must travel back with the terminal inbound id. Without it the outer send brackets against the
+    event that opened the chain and quotes the wrong message."""
+    GatewayRunner, runner, turn_ctx, pending_event = _chain_runner_and_ctx(
+        {"final_response": "done", "messages": []})
+    runner._reply_anchor_for_event = MagicMock(return_value="6002")
+
+    merged = await GatewayRunner._run_agent_queued_followup(
+        runner, turn_ctx, adapter=None, pending="hi again", pending_event=pending_event,
+        response="resp", result={"interrupted": True, "messages": []}, stream_task=None)
+
+    assert merged["queued_terminal_reply_anchor"] == "6002"
+
+
+@pytest.mark.asyncio
+async def test_an_anchorless_terminal_hands_back_no_anchor():
+    """A forum topic has no per-message anchor; the chain must not invent one, so the opening
+    anchor keeps routing the reply."""
+    GatewayRunner, runner, turn_ctx, pending_event = _chain_runner_and_ctx(
+        {"final_response": "done", "messages": []})
+
+    merged = await GatewayRunner._run_agent_queued_followup(
+        runner, turn_ctx, adapter=None, pending="hi again", pending_event=pending_event,
+        response="resp", result={"interrupted": True, "messages": []}, stream_task=None)
+
+    assert merged["queued_terminal_reply_anchor"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_deeper_chain_keeps_the_innermost_reply_anchor():
+    """Mirror of the inbound-id rule: a deeper recursion already named the terminal message and
+    its anchor, so the outer frame must not overwrite either on the way out."""
+    GatewayRunner, runner, turn_ctx, pending_event = _chain_runner_and_ctx(
+        {"final_response": "done", "messages": [], "queued_terminal_inbound_id": "6003",
+         "queued_terminal_reply_anchor": "7003"})
+    runner._reply_anchor_for_event = MagicMock(return_value="6002")
+
+    merged = await GatewayRunner._run_agent_queued_followup(
+        runner, turn_ctx, adapter=None, pending="hi again", pending_event=pending_event,
+        response="resp", result={"interrupted": True, "messages": []}, stream_task=None)
+
+    assert merged["queued_terminal_reply_anchor"] == "7003"
+
+
 # ---------------------------------------------------------------------------
 # The adapter that sent the final owns its message id: the ephemeral delete goes there.
 # ---------------------------------------------------------------------------
