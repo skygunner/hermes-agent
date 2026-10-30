@@ -360,6 +360,20 @@ def test_iter_skill_index_files_keeps_support_named_categories(tmp_path):
     assert is_excluded_skill_path(scripts_skill / "SKILL.md") is False
 
 
+def test_iter_skill_index_files_skips_hidden_dirs(tmp_path):
+    """Regression for #26451: hidden workspace dirs (.cursor, .opencode) are not
+    recursive skill sources; vendored copies must stay out of the index."""
+    real = tmp_path / "real-skill" / "SKILL.md"
+    real.parent.mkdir()
+    real.write_text("---\nname: real-skill\n---\n", encoding="utf-8")
+    for hidden in (tmp_path / ".cursor" / "skills" / "copy",
+                   tmp_path / "visible" / ".opencode" / "copy"):
+        hidden.mkdir(parents=True)
+        (hidden / "SKILL.md").write_text("---\nname: copy\n---\n", encoding="utf-8")
+
+    assert list(iter_skill_index_files(tmp_path, "SKILL.md")) == [real]
+
+
 def test_skill_support_path_uses_explicit_discovery_root_not_cwd(tmp_path, monkeypatch):
     discovery_root = tmp_path / "site-packages" / "skills"
     umbrella = discovery_root / "category" / "umbrella"

@@ -16,8 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from hermes_constants import get_hermes_home
 from tools.registry import registry, tool_error
 from hermes_cli.config import cfg_get
-from agent.skill_utils import (
-    EXCLUDED_SKILL_DIRS as _EXCLUDED_SKILL_DIRS, is_skill_support_path as _is_skill_support_path)
+from agent.skill_utils import is_skill_support_path as _is_skill_support_path
 from tools.skills_tool_setup import (
     SkillReadinessStatus, _build_setup_note, _capture_required_environment_variables,
     _get_required_environment_variables, _is_env_var_persisted, _is_remote_env_backend)
@@ -232,7 +231,8 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
     Resolution runs over ALL files first — skill_view ignores platform/disabled gates when
     collecting candidates, so it asks for hidden rows too."""
     from agent.skill_utils import (
-        TIER_PROJECT, is_disabled_entry, iter_project_skill_files, iter_skill_index_files, resolve_skill_catalog)
+        TIER_PROJECT, is_disabled_entry, is_excluded_skill_dir, iter_project_skill_files,
+        iter_skill_index_files, resolve_skill_catalog)
     cache_key = ("with_disabled" if skip_disabled else "filtered", include_hidden)
     disabled = set() if skip_disabled else _get_disabled_skill_names()
     roots, _ = skill_search_dirs()
@@ -247,7 +247,10 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
     for tier, scan_dir in roots:  # project dirs go through the quarantine chokepoint
         _iter = iter_project_skill_files if tier == TIER_PROJECT else lambda d: iter_skill_index_files(d, "SKILL.md")
         for skill_md in _iter(scan_dir):
-            if any(part in _EXCLUDED_SKILL_DIRS for part in skill_md.parts):
+            # Hidden workspace dirs (.cursor, .opencode, ...) vendor skill copies
+            # that are not installed skills; check relative to the scan root so
+            # hidden scan roots themselves (.hermes, .agents) are not misread.
+            if any(is_excluded_skill_dir(part) for part in skill_md.relative_to(scan_dir).parts[:-1]):
                 continue
             try:
                 frontmatter, body = _parse_frontmatter(_read_skill_text(skill_md)[:4000])
