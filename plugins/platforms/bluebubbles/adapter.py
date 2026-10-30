@@ -640,6 +640,13 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         # Debounce by chat_guid: BlueBubbles sends text and attachment as separate events
         # for the same iMessage. Only queue text-only events; media events flush immediately.
         key = chat_guid or session_chat_id
+        existing = self._bluebubble_pending.get(key)
+        if existing is not None and (not event.message_id or event.message_id != existing.message_id):
+            self._bluebubble_pending.pop(key)
+            prior_task = self._bluebubble_tasks.pop(key, None)
+            if prior_task and not prior_task.done():
+                prior_task.cancel()
+            await self.handle_message(existing)
         if not media_urls:
             # Text-only event: queue it, wait for potential media follow-up
             existing = self._bluebubble_pending.get(key)
