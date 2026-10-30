@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import threading
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 
 from hermes_constants import display_hermes_home
-from utils import atomic_json_write
+from utils import atomic_json_write, is_truthy_value
 from hermes_cli.config import cfg_get
 
 
@@ -117,7 +118,12 @@ def _get_webhook_config() -> dict:
 
 
 def _is_webhook_enabled() -> bool:
-    return bool(_get_webhook_config().get("enabled"))
+    # The gateway enables the platform from WEBHOOK_ENABLED (gateway/config_env.py
+    # _webhook), so the CLI gate must honor the same env var, using the same
+    # shared truthy parser as the gateway.
+    if _get_webhook_config().get("enabled"):
+        return True
+    return is_truthy_value(os.getenv("WEBHOOK_ENABLED"))
 
 
 def _get_webhook_base_url() -> str:

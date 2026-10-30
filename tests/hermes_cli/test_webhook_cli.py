@@ -15,6 +15,8 @@ from hermes_cli.webhook import (
     _subscriptions_path,
 )
 
+import hermes_cli.webhook
+
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -274,8 +276,47 @@ class TestPersistence:
 
 class TestWebhookEnabledGate:
 
+    # The real gate, captured before the autouse _isolate fixture replaces it.
+    REAL_GATE = staticmethod(hermes_cli.webhook._is_webhook_enabled)
+
     def test_blocks_list_when_disabled(self, capsys, monkeypatch):
         monkeypatch.setattr("hermes_cli.webhook._is_webhook_enabled", lambda: False)
         webhook_command(_make_args(webhook_action="list"))
         out = capsys.readouterr().out
         assert "not enabled" in out.lower()
+
+    def test_env_var_enables_webhook(self, monkeypatch):
+        """WEBHOOK_ENABLED truthy values enable the gate, matching the gateway.
+
+        The gateway parses this env var with utils.is_truthy_value
+        (gateway/config_env.py _webhook), which strips whitespace and accepts
+        the shared TRUTHY_STRINGS set; the CLI must agree on every value.
+        """
+        monkeypatch.setattr("hermes_cli.webhook._get_webhook_config", dict)
+        monkeypatch.setattr("hermes_cli.webhook._is_webhook_enabled", self.REAL_GATE)
+        for value, expected in [
+            ("true", True), ("TRUE", True), ("1", True), ("yes", True),
+            ("on", True), (" on ", True),  # is_truthy_value strips + lowercases
+            ("false", False), ("0", False), ("no", False), ("off", False),
+            ("", False), ("   ", False), ("garbage", False),
+        ]:
+            monkeypatch.setenv("WEBHOOK_ENABLED", value)
+            assert hermes_cli.webhook._is_webhook_enabled() is expected, value
+
+    def test_env_only_enables_webhook(self, tmp_path, monkeypatch):
+        """No yaml config block, WEBHOOK_ENABLED=true -> gate open."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr("hermes_cli.webhook._is_webhook_enabled", self.REAL_GATE)
+        monkeypatch.setenv("WEBHOOK_ENABLED", "true")
+        assert hermes_cli.webhook._is_webhook_enabled() is True
+        monkeypatch.setenv("WEBHOOK_ENABLED", "false")
+        assert hermes_cli.webhook._is_webhook_enabled() is False
+
+    def test_config_enabled_takes_precedence(self, monkeypatch):
+        """config.yaml enabled=true keeps the gate open even if env says false."""
+        monkeypatch.setattr(
+            "hermes_cli.webhook._get_webhook_config", lambda: {"enabled": True}
+        )
+        monkeypatch.setattr("hermes_cli.webhook._is_webhook_enabled", self.REAL_GATE)
+        monkeypatch.setenv("WEBHOOK_ENABLED", "false")
+        assert hermes_cli.webhook._is_webhook_enabled() is True
