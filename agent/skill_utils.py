@@ -27,6 +27,13 @@ EXCLUDED_SKILL_DIRS = frozenset((
     ".tox", ".nox", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 ))
 
+
+def is_excluded_skill_dir(name: str) -> bool:
+    """True if a directory name should be pruned from skill scans: the explicit
+    exclusion set plus any hidden dir (editor/agent workspaces like ``.cursor``
+    or ``.opencode`` vendor skill copies that are not installed skills)."""
+    return name in EXCLUDED_SKILL_DIRS or name.startswith(".")
+
 # Progressive-disclosure support dirs inside a skill package: loaded explicitly
 # via skill_view(skill, file_path=...), never scanned as standalone skills.
 SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
@@ -873,11 +880,11 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
 
 def iter_skill_index_files(skills_dir: Path, filename: str):
     """Walk skills_dir yielding sorted paths matching *filename*; prunes
-    EXCLUDED_SKILL_DIRS and support dirs of skill roots."""
+    EXCLUDED_SKILL_DIRS, hidden dirs and support dirs of skill roots."""
     matches: list[str] = []
     for root, dirs, files in os.walk(str(skills_dir), followlinks=True):
         has_skill_md = "SKILL.md" in files
-        dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
+        dirs[:] = [d for d in dirs if not is_excluded_skill_dir(d) and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
         if filename in files:
             matches.append(os.path.join(root, filename))
     yield from map(Path, sorted(matches))

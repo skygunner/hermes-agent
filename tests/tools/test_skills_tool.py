@@ -243,6 +243,16 @@ class TestFindAllSkills:
         assert {s["name"] for s in skills} == {"skill-a", "skill-b", "axolotl"}
         assert [s["category"] for s in skills if s["name"] == "axolotl"] == ["mlops"]
 
+    def test_skips_hidden_workspace_dirs(self, tmp_path):
+        """Regression for #26451: vendored skill copies under hidden workspace
+        dirs (.cursor, .opencode) must not surface as installed skills."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "real-skill")
+            _make_skill(tmp_path, "cursor-copy", category=".cursor/skills")
+            _make_skill(tmp_path, "opencode-copy", category="visible/.opencode")
+            skills = find_all_skills()
+
+        assert [s["name"] for s in skills] == ["real-skill"]
 
     def test_description_falls_back_to_body_and_is_truncated(self, tmp_path):
         no_desc = tmp_path / "no-desc"
