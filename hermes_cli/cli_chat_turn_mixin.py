@@ -592,9 +592,33 @@ class CLIChatTurnMixin:
         if self._voice_tts and response and not turn.use_streaming_tts:
             self._voice_speak_response_async(response)
 
+        # Re-queue post-run follow-ups in deterministic FIFO order: leftover /steer
+        # first, then the interrupt follow-up, so the next turn honors the steer
+        # before any queued normal text (#30323).
+        self._enqueue_post_run_followups(pending_message, turn.result)
+
+        return response
+
+    def _enqueue_post_run_followups(self, pending_message, result):
+        """Enqueue post-run follow-up turns onto ``_pending_input``.
+
+        The queue is FIFO, so the order here is behavioral: leftover /steer lands
+        BEFORE the interrupt follow-up so the next turn honors the steer before
+        any queued normal text (#30323). The interrupt batch keeps its internal
+        arrival order. Only reached in busy_input_mode == "interrupt"; "queue"
+        mode routes Enter straight to _pending_input.
+        """
+        from cli import _cprint
+
+        # A /steer the agent finished before absorbing becomes the next user turn.
+        _leftover_steer = result.get("pending_steer") if result else None
+        if _leftover_steer:
+            preview = _leftover_steer[:60] + ("..." if len(_leftover_steer) > 60 else "")
+            _cprint(f"\n{t('cli.chat.delivering_leftover_steer', preview=preview)}")
+            self._pending_input.put(_leftover_steer)
+
         # Re-queue the interrupt message (plus any that arrived meanwhile) as the next
-        # prompt. Only reached in busy_input_mode == "interrupt"; "queue" mode routes
-        # Enter straight to _pending_input.
+        # prompt.
         if pending_message:
             all_parts = [pending_message]
             while not self._interrupt_queue.empty():
@@ -625,15 +649,6 @@ class CLIChatTurnMixin:
             else:
                 _cprint(f"\n{t('cli.chat.sending_after_interrupt', preview=preview)}")
             self._pending_input.put(payload)
-
-        # A /steer the agent finished before absorbing becomes the next user turn.
-        _leftover_steer = turn.result.get("pending_steer") if turn.result else None
-        if _leftover_steer:
-            preview = _leftover_steer[:60] + ("..." if len(_leftover_steer) > 60 else "")
-            _cprint(f"\n{t('cli.chat.delivering_leftover_steer', preview=preview)}")
-            self._pending_input.put(_leftover_steer)
-
-        return response
 
     def _chat_resolve_interrupt(self, turn, agent_thread, interrupt_msg, response):
         """Return ``(pending_message, show_marker)``; clears a stale agent interrupt flag.
