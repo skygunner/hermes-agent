@@ -172,7 +172,10 @@ def _retry_launchctl_bootstrap_until_registered(
             _gw()._launchctl_bootstrap(domain, plist_path, label, timeout=30)
             if _gw()._launchctl_label_supervising_process(label):
                 return True
-            outcome = f"exited 0 but {domain}/{label} has no supervised process (launchctl list)"
+            subprocess.run(["launchctl", "kickstart", f"{domain}/{label}"], check=True, timeout=30)
+            if _gw()._launchctl_label_supervising_process(label):
+                return True
+            outcome = f"exited 0 but {domain}/{label} has no supervised process after kickstart (launchctl list)"
         except subprocess.CalledProcessError as exc:
             outcome = f"failed (rc={exc.returncode}) for {domain}/{label}"
         except subprocess.TimeoutExpired:
