@@ -748,7 +748,9 @@ class TestBlueBubblesAttachmentAuthorization:
                 "attachments": [{"guid": "att-1", "mimeType": "image/jpeg"}],
             },
         }))
-        await asyncio.sleep(0)
+        pending = list(adapter._bluebubble_tasks.values())
+        if pending:  # text-only events are debounced; wait for the flush before asserting
+            await asyncio.wait_for(asyncio.gather(*pending), timeout=2)
 
         assert response.status == 200
         download.assert_not_awaited()
